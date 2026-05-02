@@ -2,7 +2,7 @@ use std::env;
 use std::path::Path;
 use std::process::ExitCode;
 
-use local_history_core::placeholder_project_id;
+use local_history_core::project_id_for_root;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -21,21 +21,21 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         [_, command, project_root] if command == "watch" => {
-            let project_id = placeholder_project_id(Path::new(project_root));
+            let project_id = project_id_for_root(Path::new(project_root));
             println!(
                 "watch bootstrap: project_root={project_root} project_id={project_id} mode=placeholder"
             );
             ExitCode::SUCCESS
         }
         [_, command, project_root] if command == "ensure-daemon" => {
-            let project_id = placeholder_project_id(Path::new(project_root));
+            let project_id = project_id_for_root(Path::new(project_root));
             println!(
                 "ensure-daemon bootstrap: project_root={project_root} project_id={project_id}"
             );
             ExitCode::SUCCESS
         }
         [_, command, project_root] if command == "status" => {
-            let project_id = placeholder_project_id(Path::new(project_root));
+            let project_id = project_id_for_root(Path::new(project_root));
             println!("status bootstrap: project_root={project_root} project_id={project_id}");
             ExitCode::SUCCESS
         }

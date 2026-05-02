@@ -19,6 +19,7 @@ The current scaffold establishes the repository baseline for implementation. It 
 - `crates/local-history-sidecar` is the native daemon/process boundary.
 - `editors/zed` is a dedicated Zed extension package, kept outside the root workspace on purpose.
 - `xtask` provides one-command local checks for the Rust workspace, the Zed extension package, and the combined repository path.
+- `RHYTHM.md` records meaningful repository decisions in newest-first order.
 
 ## Quickstart
 
@@ -59,6 +60,7 @@ The root workspace is pinned to Rust `1.75.0` so the core/cli/sidecar scaffold c
 ```text
 zed-local-history/
   README.md
+  RHYTHM.md
   LICENSE
   Cargo.toml
   rust-toolchain.toml

@@ -1,0 +1,239 @@
+use std::fmt;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProjectId(String);
+
+impl ProjectId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for ProjectId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for ProjectId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SnapshotId(String);
+
+impl SnapshotId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContentHash(String);
+
+impl ContentHash {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRecord {
+    pub id: ProjectId,
+    pub root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackedFileRecord {
+    pub project_id: ProjectId,
+    pub relative_path: PathBuf,
+    pub current_content_hash: ContentHash,
+    pub size_bytes: u64,
+    pub is_binary: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotKind {
+    Raw,
+    Safety,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotRecord {
+    pub id: SnapshotId,
+    pub project_id: ProjectId,
+    pub relative_path: PathBuf,
+    pub blob_hash: ContentHash,
+    pub size_bytes: u64,
+    pub timestamp: String,
+    pub kind: SnapshotKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompressionKind {
+    Zstd,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentBlobRecord {
+    pub hash: ContentHash,
+    pub size_bytes: u64,
+    pub compression: CompressionKind,
+    pub storage_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreOperationRecord {
+    pub id: String,
+    pub project_id: ProjectId,
+    pub relative_path: PathBuf,
+    pub restored_snapshot_id: SnapshotId,
+    pub safety_snapshot_id: SnapshotId,
+    pub previous_content_hash: ContentHash,
+    pub restored_content_hash: ContentHash,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HourBucket {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimeSegment {
+    pub label: String,
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedMarkdownViewEntry {
+    pub relative_markdown_path: PathBuf,
+    pub title: String,
+    pub generated_at: String,
+}
+
+pub fn segment_label(hour: u8, minute: u8) -> Option<String> {
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+
+    let start_minute = (minute / 10) * 10;
+    let mut end_hour = hour;
+    let mut end_minute = start_minute + 10;
+
+    if end_minute == 60 {
+        end_hour = (hour + 1) % 24;
+        end_minute = 0;
+    }
+
+    Some(format!(
+        "{hour:02}-{start_minute:02}__{end_hour:02}-{end_minute:02}"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        segment_label, CompressionKind, ContentBlobRecord, ContentHash, GeneratedMarkdownViewEntry,
+        HourBucket, ProjectId, ProjectRecord, RestoreOperationRecord, SnapshotId, SnapshotKind,
+        SnapshotRecord, TimeSegment, TrackedFileRecord,
+    };
+    use std::path::PathBuf;
+
+    #[test]
+    fn maps_minutes_to_fixed_ten_minute_segments() {
+        assert_eq!(segment_label(14, 0).as_deref(), Some("14-00__14-10"));
+        assert_eq!(segment_label(14, 14).as_deref(), Some("14-10__14-20"));
+        assert_eq!(segment_label(14, 59).as_deref(), Some("14-50__15-00"));
+        assert!(segment_label(24, 0).is_none());
+    }
+
+    #[test]
+    fn core_entities_capture_stage_three_storage_shape() {
+        let project_id = ProjectId::new("project-id");
+        let content_hash = ContentHash::new("hash");
+        let raw_snapshot_id = SnapshotId::new("raw-1");
+        let safety_snapshot_id = SnapshotId::new("safety-1");
+
+        let project = ProjectRecord {
+            id: project_id.clone(),
+            root: PathBuf::from("/workspace/demo"),
+        };
+        let tracked_file = TrackedFileRecord {
+            project_id: project_id.clone(),
+            relative_path: PathBuf::from("src/lib.rs"),
+            current_content_hash: content_hash.clone(),
+            size_bytes: 128,
+            is_binary: false,
+        };
+        let snapshot = SnapshotRecord {
+            id: raw_snapshot_id.clone(),
+            project_id: project_id.clone(),
+            relative_path: tracked_file.relative_path.clone(),
+            blob_hash: content_hash.clone(),
+            size_bytes: tracked_file.size_bytes,
+            timestamp: "2026-05-02T14:14:28+02:00".to_string(),
+            kind: SnapshotKind::Raw,
+        };
+        let blob = ContentBlobRecord {
+            hash: content_hash.clone(),
+            size_bytes: 128,
+            compression: CompressionKind::Zstd,
+            storage_path: PathBuf::from("blobs/ab/hash.zst"),
+        };
+        let restore_operation = RestoreOperationRecord {
+            id: "restore-1".to_string(),
+            project_id: project_id.clone(),
+            relative_path: tracked_file.relative_path.clone(),
+            restored_snapshot_id: raw_snapshot_id,
+            safety_snapshot_id,
+            previous_content_hash: ContentHash::new("before"),
+            restored_content_hash: content_hash.clone(),
+            timestamp: "2026-05-02T14:20:00+02:00".to_string(),
+        };
+        let hour_bucket = HourBucket {
+            from: "2026-05-02T14:00:00+02:00".to_string(),
+            to: "2026-05-02T15:00:00+02:00".to_string(),
+        };
+        let segment = TimeSegment {
+            label: segment_label(14, 14).expect("segment label must exist"),
+            from: "2026-05-02T14:10:00+02:00".to_string(),
+            to: "2026-05-02T14:20:00+02:00".to_string(),
+        };
+        let view_entry = GeneratedMarkdownViewEntry {
+            relative_markdown_path: PathBuf::from("2026-05-02/14/14-10__14-20.md"),
+            title: "14:10-14:20".to_string(),
+            generated_at: "2026-05-02T14:20:00+02:00".to_string(),
+        };
+
+        assert_eq!(project.id.as_str(), "project-id");
+        assert_eq!(project.root, PathBuf::from("/workspace/demo"));
+        assert_eq!(tracked_file.current_content_hash.as_str(), "hash");
+        assert_eq!(snapshot.kind, SnapshotKind::Raw);
+        assert_eq!(blob.compression, CompressionKind::Zstd);
+        assert_eq!(restore_operation.relative_path, PathBuf::from("src/lib.rs"));
+        assert_eq!(hour_bucket.to, "2026-05-02T15:00:00+02:00");
+        assert_eq!(segment.label, "14-10__14-20");
+        assert_eq!(
+            view_entry.relative_markdown_path,
+            PathBuf::from("2026-05-02/14/14-10__14-20.md")
+        );
+    }
+}

@@ -2,7 +2,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use local_history_core::{default_data_dir, placeholder_project_id, StorageLayout};
+use local_history_core::{default_data_dir, project_id_for_root, StorageLayout};
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -26,14 +26,14 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         [_, command, project_root] if command == "recent" => {
-            let project_id = placeholder_project_id(Path::new(project_root));
+            let project_id = project_id_for_root(Path::new(project_root));
             println!(
                 "recent bootstrap: project_root={project_root} project_id={project_id} limit=10"
             );
             ExitCode::SUCCESS
         }
         [_, command, project_root] if command == "list" => {
-            let project_id = placeholder_project_id(Path::new(project_root));
+            let project_id = project_id_for_root(Path::new(project_root));
             println!(
                 "list bootstrap: project_root={project_root} project_id={project_id} page=1 page_size=20"
             );
@@ -61,13 +61,13 @@ fn main() -> ExitCode {
 }
 
 fn layout_for(project_root: &Path) -> StorageLayout {
-    let project_id = placeholder_project_id(project_root);
-    StorageLayout::for_project(default_data_dir(), &project_id)
+    let project_id = project_id_for_root(project_root);
+    StorageLayout::for_project(default_data_dir(), project_id)
 }
 
 fn print_status(project_root: &Path) {
-    let project_id = placeholder_project_id(project_root);
-    let layout = StorageLayout::for_project(default_data_dir(), &project_id);
+    let project_id = project_id_for_root(project_root);
+    let layout = StorageLayout::for_project(default_data_dir(), project_id.clone());
 
     println!("project_root={}", project_root.display());
     println!("project_id={project_id}");

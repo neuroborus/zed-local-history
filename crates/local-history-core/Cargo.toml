@@ -9,3 +9,6 @@ description = "Core domain and storage helpers for zed-local-history."
 
 [lib]
 path = "src/lib.rs"
+
+[dependencies]
+sha2 = "0.10.9"
