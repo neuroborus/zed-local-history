@@ -16,4 +16,10 @@ pub enum StorageError {
 
     #[error("content blob not found: {0}")]
     BlobNotFound(String),
+
+    #[error("restore operation not found for project: {0}")]
+    RestoreOperationNotFound(String),
+
+    #[error("safety snapshot not found for project: {0}")]
+    SafetySnapshotNotFound(String),
 }

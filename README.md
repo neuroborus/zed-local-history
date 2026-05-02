@@ -9,7 +9,7 @@ This repository is set up around the product direction captured in [agents/GOALS
 - thin Zed integration instead of a custom editor UI dependency;
 - clean monorepo layout that can grow without structural churn.
 
-The current scaffold establishes the repository baseline for implementation. It does not claim that snapshotting, restore, watcher, or Zed-side bootstrapping are complete yet.
+The repository now has a real storage-backed recovery path for manual CLI snapshots and safe restore flows. File watching, generated Markdown views, and full Zed-side sidecar lifecycle are still later-stage work.
 
 ## What is here
 
@@ -35,13 +35,27 @@ Run the full repository checks, including `editors/zed`:
 cargo run -p xtask -- full-ci
 ```
 
-Try the placeholder CLI surfaces:
+Try the CLI recovery surfaces:
 
 ```bash
-cargo run -p local-history-cli -- status .
-cargo run -p local-history-cli -- view-root .
+cargo run -p local-history-cli -- snapshot . --file README.md
+cargo run -p local-history-cli -- recent .
+cargo run -p local-history-cli -- show <snapshot-id>
+cargo run -p local-history-cli -- restore <snapshot-id>
+cargo run -p local-history-cli -- restore --project-root . --recent 1
+cargo run -p local-history-cli -- safety-list .
+cargo run -p local-history-cli -- undo-restore .
+cargo run -p local-history-cli -- restore-last-safety .
 cargo run -p local-history-sidecar -- health
 ```
+
+Current CLI behavior:
+
+- `recent` lists raw user snapshots only, so safety snapshots do not pollute normal restore numbering.
+- `restore` always creates a safety snapshot first, records a restore operation, and then applies the target snapshot.
+- `undo-restore` replays the latest safety snapshot for the project.
+- `restore-last-safety` is an explicit escape hatch to restore the newest safety snapshot directly.
+- `safety-list` shows the stored safety snapshots separately from normal history.
 
 ## Zed Extension Notes
 

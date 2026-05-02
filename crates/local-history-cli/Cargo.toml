@@ -12,4 +12,6 @@ name = "local-history"
 path = "src/main.rs"
 
 [dependencies]
+clap = { version = "=4.5.23", features = ["derive"] }
 local-history-core = { path = "../local-history-core" }
+time = { version = "=0.3.36", features = ["formatting", "macros", "parsing"] }

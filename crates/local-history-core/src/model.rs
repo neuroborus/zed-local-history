@@ -110,6 +110,7 @@ pub struct SnapshotRecord {
     pub size_bytes: u64,
     pub timestamp: String,
     pub kind: SnapshotKind,
+    pub captures_missing_file: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,9 +145,18 @@ pub struct RestoreOperationRecord {
     pub relative_path: PathBuf,
     pub restored_snapshot_id: SnapshotId,
     pub safety_snapshot_id: SnapshotId,
+    pub previous_file_existed: bool,
     pub previous_content_hash: ContentHash,
     pub restored_content_hash: ContentHash,
     pub timestamp: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreOutcome {
+    pub restored_snapshot: SnapshotRecord,
+    pub safety_snapshot: SnapshotRecord,
+    pub operation: RestoreOperationRecord,
+    pub restored_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,8 +202,8 @@ pub fn segment_label(hour: u8, minute: u8) -> Option<String> {
 mod tests {
     use super::{
         segment_label, CompressionKind, ContentBlobRecord, ContentHash, GeneratedMarkdownViewEntry,
-        HourBucket, ProjectId, ProjectRecord, RestoreOperationRecord, SnapshotId, SnapshotKind,
-        SnapshotRecord, TimeSegment, TrackedFileRecord,
+        HourBucket, ProjectId, ProjectRecord, RestoreOperationRecord, RestoreOutcome, SnapshotId,
+        SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord,
     };
     use std::path::PathBuf;
 
@@ -231,6 +241,7 @@ mod tests {
             size_bytes: tracked_file.size_bytes,
             timestamp: "2026-05-02T14:14:28+02:00".to_string(),
             kind: SnapshotKind::Raw,
+            captures_missing_file: false,
         };
         let blob = ContentBlobRecord {
             hash: content_hash.clone(),
@@ -244,9 +255,25 @@ mod tests {
             relative_path: tracked_file.relative_path.clone(),
             restored_snapshot_id: raw_snapshot_id,
             safety_snapshot_id,
+            previous_file_existed: true,
             previous_content_hash: ContentHash::new("before"),
             restored_content_hash: content_hash.clone(),
             timestamp: "2026-05-02T14:20:00+02:00".to_string(),
+        };
+        let restore_outcome = RestoreOutcome {
+            restored_snapshot: snapshot.clone(),
+            safety_snapshot: SnapshotRecord {
+                id: SnapshotId::new("safety-2"),
+                project_id: project_id.clone(),
+                relative_path: tracked_file.relative_path.clone(),
+                blob_hash: ContentHash::new("before"),
+                size_bytes: 42,
+                timestamp: "2026-05-02T14:19:59+02:00".to_string(),
+                kind: SnapshotKind::Safety,
+                captures_missing_file: false,
+            },
+            operation: restore_operation.clone(),
+            restored_path: PathBuf::from("/workspace/demo/src/lib.rs"),
         };
         let hour_bucket = HourBucket {
             from: "2026-05-02T14:00:00+02:00".to_string(),
@@ -267,8 +294,11 @@ mod tests {
         assert_eq!(project.root, PathBuf::from("/workspace/demo"));
         assert_eq!(tracked_file.current_content_hash.as_str(), "hash");
         assert_eq!(snapshot.kind, SnapshotKind::Raw);
+        assert!(!snapshot.captures_missing_file);
         assert_eq!(blob.compression, CompressionKind::Zstd);
         assert_eq!(restore_operation.relative_path, PathBuf::from("src/lib.rs"));
+        assert!(restore_operation.previous_file_existed);
+        assert_eq!(restore_outcome.operation.id, "restore-1");
         assert_eq!(hour_bucket.to, "2026-05-02T15:00:00+02:00");
         assert_eq!(segment.label, "14-10__14-20");
         assert_eq!(
