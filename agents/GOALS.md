@@ -39,7 +39,7 @@ Markdown files are a browsable presentation layer.
 CLI commands are the reliable recovery interface.
 ```
 
-Post-MVP, the same core may also be exposed through an MCP server so Zed's Agent Panel can call local-history tools directly. That future surface should complement the CLI, not replace it.
+The same core may also be exposed through an MCP server so Zed's Agent Panel can call local-history tools directly. That surface should complement the CLI, not replace it.
 
 ## 2. MVP Product Direction
 
@@ -121,7 +121,7 @@ This should be a monorepo with two main deliverables:
 1. A Zed extension.
 2. A native Rust sidecar binary.
 
-It may later grow a third integration surface:
+The architecture should also leave room for a third integration surface:
 
 3. An MCP server that exposes local-history tools to agent clients such as the Zed Agent Panel.
 
@@ -149,11 +149,6 @@ zed-local-history/
       Cargo.toml
 
     local-history-cli/
-      src/
-        main.rs
-      Cargo.toml
-
-    local-history-mcp/
       src/
         main.rs
       Cargo.toml
@@ -239,7 +234,7 @@ The CLI is not secondary. It is the reliable interface for:
 
 ### 5.4 `local-history-mcp`
 
-Optional post-MVP MCP server adapter for agent clients.
+Optional MCP server adapter for agent clients.
 
 Responsibilities:
 
@@ -248,7 +243,16 @@ Responsibilities:
 - keep destructive actions such as restore safety-first;
 - return stable, agent-friendly structured output for recent snapshots, snapshot view, status, and restore flows.
 
-This crate must not become a second home for storage or restore business logic. It is an adapter layer.
+Suggested tool surface:
+
+- `local_history_status`
+- `local_history_create_snapshot`
+- `local_history_recent_snapshots`
+- `local_history_diff_snapshot`
+- `local_history_restore_snapshot`
+- `local_history_view_snapshot`
+
+If this crate is added, it must not become a second home for storage or restore business logic. It is an adapter layer.
 
 ### 5.5 `editors/zed`
 
@@ -261,7 +265,7 @@ Responsibilities:
 - make the binary executable where needed;
 - start or verify the sidecar via a short command such as `ensure-daemon`;
 - open generated Markdown reports or snapshot view files in Zed;
-- optionally register a local-history MCP server for the Agent Panel if that path is implemented later;
+- optionally register a local-history MCP server for the Agent Panel when that integration surface is used;
 - expose focused commands where the Zed extension API allows it;
 - show clear errors when required capabilities are disabled.
 
@@ -1198,14 +1202,6 @@ MVP should not require:
 - undo restore;
 - retention;
 - JSON output;
-
-### Phase 2 — Agent Surfaces
-
-- optional MCP server adapter;
-- Agent Panel tool definitions for status, recent snapshots, snapshot view, diff, and restore;
-- extension-managed MCP registration for Zed where useful;
-- reuse of existing core and CLI/sidecar contracts instead of duplicating logic.
-- CLI basics.
 
 ### Phase 2 — Markdown-First UX
 

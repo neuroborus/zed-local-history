@@ -12,7 +12,7 @@ The project goals are intentionally filesystem-first:
 
 The current Zed extension scaffold reserves a realistic integration surface without pretending that the product UX is already implemented.
 
-Zed's documented MCP server support also creates a second possible future integration route: the extension may eventually register a local-history MCP server for the Agent Panel, or users may connect such a server directly through their `context_servers` settings. That path is documented as additive to the current CLI/Markdown workflow.
+Zed's documented MCP server support also creates a second possible integration route: the extension may register a local-history MCP server for the Agent Panel, or users may connect such a server directly through their `context_servers` settings. That path is documented as additive to the current CLI/Markdown workflow.
 
 ## Current shape
 
@@ -27,7 +27,7 @@ Zed's documented MCP server support also creates a second possible future integr
 - make the sidecar executable where needed;
 - run focused sidecar commands such as `ensure-daemon`, `status`, and Markdown view lookups;
 - expose the most useful recovery flows through Zed-supported extension surfaces.
-- optionally register a future local-history MCP server when that adapter exists.
+- optionally register a local-history MCP server when that adapter exists.
 
 ## Current commands
 
@@ -37,7 +37,7 @@ Zed's documented MCP server support also creates a second possible future integr
 
 These commands currently return bootstrap text only. They exist to anchor the intended Zed-side workflow while Stage 1 API validation happens.
 
-If MCP integration is added later, these commands may coexist with Agent Panel tools rather than being replaced by them.
+If MCP integration is added, these commands may coexist with Agent Panel tools rather than being replaced by them.
 
 ## Validation target
 

@@ -11,7 +11,7 @@
 
 - All code comments, logs, and user-facing diagnostics must be in English.
 - Keep `local-history-core` editor-agnostic. Zed-specific code belongs under `editors/zed` or at the sidecar boundary.
-- If an MCP server is added later, keep it as a thin adapter over `local-history-core` or sidecar commands; do not move recovery business logic into the MCP layer.
+- If an MCP server is introduced, keep it as a thin adapter over `local-history-core` or sidecar commands; do not move recovery business logic into the MCP layer.
 - Prefer small, explicit interfaces between crates; the JSON contract should stay stable and easy to test.
 - Do not introduce heavy dependencies early. Add crates when they are conventional for the problem and clearly justified.
 - Treat generated Markdown as a presentation layer, not the source of truth.

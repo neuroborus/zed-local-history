@@ -22,7 +22,38 @@ Rust sidecar
 
 The Zed extension should install/start the sidecar and make generated Markdown history easy to open inside Zed.
 
-Post-MVP, the project may also add a local MCP server so Zed's Agent Panel can call local-history tools directly without replacing the CLI workflow.
+The architecture should also leave room for a local MCP server so Zed's Agent Panel can call local-history tools directly without replacing the CLI workflow. This is a documentation and architecture concern, not a numbered MVP stage.
+
+## Additional Architecture Note — MCP Surface
+
+Alongside the MVP surfaces, the repository should leave room for an MCP server adapter that exposes local-history tools to agent clients such as the Zed Agent Panel.
+
+This is not a numbered roadmap stage and not a replacement for the CLI. It is an additional integration surface.
+
+If added, the intended shape is:
+
+```text
+crates/
+  local-history-core/
+  local-history-cli/
+  local-history-mcp/
+```
+
+The MCP layer should stay thin and adapt protocol calls to existing core or sidecar behavior.
+
+Suggested tools:
+
+- `local_history_status`
+- `local_history_create_snapshot`
+- `local_history_recent_snapshots`
+- `local_history_diff_snapshot`
+- `local_history_restore_snapshot`
+- `local_history_view_snapshot`
+
+If exposed through Zed, it may be connected either:
+
+- directly through user `context_servers` settings; or
+- through extension-managed registration in `extension.toml`.
 
 ## Final MVP Result
 
@@ -165,7 +196,6 @@ zed-local-history/
     local-history-core/
     local-history-sidecar/
     local-history-cli/
-    local-history-mcp/
 
   editors/
     zed/
@@ -191,7 +221,6 @@ members = [
   "crates/local-history-core",
   "crates/local-history-sidecar",
   "crates/local-history-cli",
-  "crates/local-history-mcp",
   "xtask"
 ]
 ```
@@ -869,9 +898,9 @@ Restore from Zed must call the sidecar.
 
 The extension must not implement restore logic itself.
 
-### 10.8 Keep future MCP registration optional
+### 10.8 Keep MCP registration optional
 
-If the project later adds an MCP server, the extension may register it through `context_servers.*` in `extension.toml` and return its startup command from the extension API.
+If the project adds an MCP server, the extension may register it through `context_servers.*` in `extension.toml` and return its startup command from the extension API.
 
 That route should remain additive. The MVP extension must not depend on MCP for basic recovery.
 
@@ -1104,26 +1133,6 @@ Because the sidecar is editor-independent, support can be added for:
 - JetBrains external tools;
 - Neovim;
 - standalone TUI.
-
-### 13.6 MCP server for agent workflows
-
-Add a `local-history-mcp` crate as a thin adapter over `local-history-core`.
-
-Suggested tools:
-
-- `local_history_status`
-- `local_history_create_snapshot`
-- `local_history_recent_snapshots`
-- `local_history_diff_snapshot`
-- `local_history_restore_snapshot`
-- `local_history_view_snapshot`
-
-If exposed through Zed, this can be connected either:
-
-- directly through user `context_servers` settings; or
-- through a Zed extension that registers the MCP server.
-
-This should remain additive to the CLI and Markdown workflows, not a replacement for them.
 
 ---
 

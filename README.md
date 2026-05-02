@@ -9,7 +9,7 @@ This repository is set up around the product direction captured in [agents/GOALS
 - thin Zed integration instead of a custom editor UI dependency;
 - clean monorepo layout that can grow without structural churn.
 
-The documented long-term direction also leaves room for an optional MCP server surface for Zed Agent workflows, but that is intentionally separate from the current MVP path.
+The documented architecture also leaves room for an MCP server surface for Zed Agent workflows, but that remains separate from the current MVP path.
 
 The repository now has a real storage-backed recovery path for manual CLI snapshots and safe restore flows. File watching, generated Markdown views, and full Zed-side sidecar lifecycle are still later-stage work.
 
@@ -23,7 +23,7 @@ The repository now has a real storage-backed recovery path for manual CLI snapsh
 - `xtask` provides one-command local checks for the Rust workspace, the Zed extension package, and the combined repository path.
 - `RHYTHM.md` records meaningful repository decisions in newest-first order.
 
-Planned later, but not implemented yet:
+Documented, but not implemented yet:
 
 - `local-history-mcp` as a thin MCP adapter for agent-facing tool calls.
 
@@ -79,7 +79,7 @@ The `editors/zed` package follows the current documented Zed extension shape:
 - Rust `cdylib` crate compiled to WebAssembly;
 - thin integration surface centered around slash commands today.
 
-Zed also supports MCP servers for the Agent Panel, either through direct user `context_servers` settings or through extension-managed MCP server registration. The project docs treat that as a future additive integration path, not as a replacement for CLI and Markdown recovery.
+Zed also supports MCP servers for the Agent Panel, either through direct user `context_servers` settings or through extension-managed MCP server registration. The project docs treat that as an additive integration path, not as a replacement for CLI and Markdown recovery.
 
 The richer UX described in the product docs, such as opening generated Markdown directly or managing the sidecar lifecycle entirely from editor actions, still needs Stage 1 validation against the current Zed extension API.
 
