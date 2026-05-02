@@ -22,6 +22,8 @@ Rust sidecar
 
 The Zed extension should install/start the sidecar and make generated Markdown history easy to open inside Zed.
 
+Post-MVP, the project may also add a local MCP server so Zed's Agent Panel can call local-history tools directly without replacing the CLI workflow.
+
 ## Final MVP Result
 
 At the end of MVP, the user should be able to:
@@ -163,6 +165,7 @@ zed-local-history/
     local-history-core/
     local-history-sidecar/
     local-history-cli/
+    local-history-mcp/
 
   editors/
     zed/
@@ -188,6 +191,7 @@ members = [
   "crates/local-history-core",
   "crates/local-history-sidecar",
   "crates/local-history-cli",
+  "crates/local-history-mcp",
   "xtask"
 ]
 ```
@@ -865,6 +869,12 @@ Restore from Zed must call the sidecar.
 
 The extension must not implement restore logic itself.
 
+### 10.8 Keep future MCP registration optional
+
+If the project later adds an MCP server, the extension may register it through `context_servers.*` in `extension.toml` and return its startup command from the extension API.
+
+That route should remain additive. The MVP extension must not depend on MCP for basic recovery.
+
 ## Expected Result
 
 A Zed user can install the extension, start watching, open history Markdown, and restore snapshots.
@@ -1094,6 +1104,26 @@ Because the sidecar is editor-independent, support can be added for:
 - JetBrains external tools;
 - Neovim;
 - standalone TUI.
+
+### 13.6 MCP server for agent workflows
+
+Add a `local-history-mcp` crate as a thin adapter over `local-history-core`.
+
+Suggested tools:
+
+- `local_history_status`
+- `local_history_create_snapshot`
+- `local_history_recent_snapshots`
+- `local_history_diff_snapshot`
+- `local_history_restore_snapshot`
+- `local_history_view_snapshot`
+
+If exposed through Zed, this can be connected either:
+
+- directly through user `context_servers` settings; or
+- through a Zed extension that registers the MCP server.
+
+This should remain additive to the CLI and Markdown workflows, not a replacement for them.
 
 ---
 
