@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{named_params, params, Connection, OptionalExtension};
 
 use crate::error::StorageError;
 use crate::hashing::sha256_hex;
@@ -91,6 +91,38 @@ pub struct SnapshotWriteRequest {
     pub kind: SnapshotKind,
     pub is_binary: bool,
     pub captures_missing_file: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotQuery {
+    pub relative_path: Option<PathBuf>,
+    pub from_timestamp: Option<String>,
+    pub to_timestamp: Option<String>,
+    pub kind: Option<SnapshotKind>,
+    pub page: usize,
+    pub page_size: usize,
+}
+
+impl Default for SnapshotQuery {
+    fn default() -> Self {
+        Self {
+            relative_path: None,
+            from_timestamp: None,
+            to_timestamp: None,
+            kind: None,
+            page: 1,
+            page_size: 20,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotPage {
+    pub page: usize,
+    pub page_size: usize,
+    pub total_items: usize,
+    pub total_pages: usize,
+    pub items: Vec<SnapshotRecord>,
 }
 
 #[derive(Debug)]
@@ -213,16 +245,107 @@ impl LocalHistoryStore {
         self.get_snapshot(snapshot_id)
     }
 
+    pub fn query_snapshots(&self, query: &SnapshotQuery) -> Result<SnapshotPage, StorageError> {
+        let relative_path = query
+            .relative_path
+            .as_ref()
+            .map(|path| normalize_relative_path(path))
+            .transpose()?;
+        let relative_path_string = relative_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned());
+        let page = std::cmp::max(query.page, 1);
+        let page_size = std::cmp::max(query.page_size, 1);
+        let offset = ((page - 1) * page_size) as i64;
+        let kind = query.kind.as_ref().map(SnapshotKind::as_str);
+        let relative_path_param = relative_path_string.as_deref();
+        let from_timestamp = query.from_timestamp.as_deref();
+        let to_timestamp = query.to_timestamp.as_deref();
+
+        let total_items: usize = self.connection.query_row(
+            "SELECT COUNT(*)
+             FROM snapshots
+             WHERE project_id = :project_id
+               AND (:kind IS NULL OR kind = :kind)
+               AND (:relative_path IS NULL OR relative_path = :relative_path)
+               AND (:from_timestamp IS NULL OR unixepoch(timestamp) >= unixepoch(:from_timestamp))
+               AND (:to_timestamp IS NULL OR unixepoch(timestamp) < unixepoch(:to_timestamp))",
+            named_params! {
+                ":project_id": self.project.id.as_str(),
+                ":kind": kind,
+                ":relative_path": relative_path_param,
+                ":from_timestamp": from_timestamp,
+                ":to_timestamp": to_timestamp,
+            },
+            |row| row.get::<_, i64>(0),
+        )? as usize;
+        let total_pages = if total_items == 0 {
+            0
+        } else {
+            (total_items + page_size - 1) / page_size
+        };
+        let mut statement = self.connection.prepare(
+            "SELECT id, project_id, relative_path, blob_hash, size_bytes, timestamp, kind,
+                    captures_missing_file
+             FROM snapshots
+             WHERE project_id = :project_id
+               AND (:kind IS NULL OR kind = :kind)
+               AND (:relative_path IS NULL OR relative_path = :relative_path)
+               AND (:from_timestamp IS NULL OR unixepoch(timestamp) >= unixepoch(:from_timestamp))
+               AND (:to_timestamp IS NULL OR unixepoch(timestamp) < unixepoch(:to_timestamp))
+             ORDER BY unixepoch(timestamp) DESC, id DESC
+             LIMIT :limit OFFSET :offset",
+        )?;
+        let rows = statement.query_map(
+            named_params! {
+                ":project_id": self.project.id.as_str(),
+                ":kind": kind,
+                ":relative_path": relative_path_param,
+                ":from_timestamp": from_timestamp,
+                ":to_timestamp": to_timestamp,
+                ":limit": page_size as i64,
+                ":offset": offset,
+            },
+            snapshot_row_mapper,
+        )?;
+        let items = rows.collect::<Result<Vec<_>, _>>()?;
+
+        Ok(SnapshotPage {
+            page,
+            page_size,
+            total_items,
+            total_pages,
+            items,
+        })
+    }
+
     pub fn recent_snapshots(&self, limit: usize) -> Result<Vec<SnapshotRecord>, StorageError> {
-        self.list_snapshots(limit, None)
+        Ok(self
+            .query_snapshots(&SnapshotQuery {
+                page_size: limit,
+                ..SnapshotQuery::default()
+            })?
+            .items)
     }
 
     pub fn recent_raw_snapshots(&self, limit: usize) -> Result<Vec<SnapshotRecord>, StorageError> {
-        self.list_snapshots(limit, Some(SnapshotKind::Raw))
+        Ok(self
+            .query_snapshots(&SnapshotQuery {
+                kind: Some(SnapshotKind::Raw),
+                page_size: limit,
+                ..SnapshotQuery::default()
+            })?
+            .items)
     }
 
     pub fn safety_snapshots(&self, limit: usize) -> Result<Vec<SnapshotRecord>, StorageError> {
-        self.list_snapshots(limit, Some(SnapshotKind::Safety))
+        Ok(self
+            .query_snapshots(&SnapshotQuery {
+                kind: Some(SnapshotKind::Safety),
+                page_size: limit,
+                ..SnapshotQuery::default()
+            })?
+            .items)
     }
 
     pub fn store_snapshot(
@@ -415,51 +538,6 @@ impl LocalHistoryStore {
         )?;
 
         Ok(blob)
-    }
-
-    fn list_snapshots(
-        &self,
-        limit: usize,
-        kind: Option<SnapshotKind>,
-    ) -> Result<Vec<SnapshotRecord>, StorageError> {
-        let effective_limit = std::cmp::max(limit, 1) as i64;
-
-        let mut statement = match kind {
-            Some(_) => self.connection.prepare(
-                "SELECT id, project_id, relative_path, blob_hash, size_bytes, timestamp, kind,
-                        captures_missing_file
-                 FROM snapshots
-                 WHERE project_id = ?1 AND kind = ?2
-                 ORDER BY timestamp DESC, id DESC
-                 LIMIT ?3",
-            )?,
-            None => self.connection.prepare(
-                "SELECT id, project_id, relative_path, blob_hash, size_bytes, timestamp, kind,
-                        captures_missing_file
-                 FROM snapshots
-                 WHERE project_id = ?1
-                 ORDER BY timestamp DESC, id DESC
-                 LIMIT ?2",
-            )?,
-        };
-
-        let rows = match kind {
-            Some(snapshot_kind) => statement.query_map(
-                params![
-                    self.project.id.as_str(),
-                    snapshot_kind.as_str(),
-                    effective_limit
-                ],
-                snapshot_row_mapper,
-            )?,
-            None => statement.query_map(
-                params![self.project.id.as_str(), effective_limit],
-                snapshot_row_mapper,
-            )?,
-        };
-
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StorageError::from)
     }
 
     fn read_current_file_state(
@@ -788,7 +866,7 @@ fn restore_operation_row_mapper(
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalHistoryStore, SnapshotWriteRequest, SCHEMA_SQL};
+    use super::{LocalHistoryStore, SnapshotQuery, SnapshotWriteRequest, SCHEMA_SQL};
     use crate::{SnapshotId, SnapshotKind};
     use rusqlite::params;
     use std::fs;
@@ -1140,6 +1218,111 @@ mod tests {
         assert_eq!(raw_recent[0].id, raw_snapshot.id);
         assert_eq!(safety_recent.len(), 1);
         assert_eq!(safety_recent[0].kind, SnapshotKind::Safety);
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn query_snapshots_supports_pagination_and_file_filter() {
+        let (base_dir, project_root) = create_test_roots("query-file");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/alpha.rs"),
+                contents: b"alpha-1".to_vec(),
+                timestamp: "2026-05-02T14:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("first snapshot must store");
+        let latest_alpha = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/alpha.rs"),
+                contents: b"alpha-2".to_vec(),
+                timestamp: "2026-05-02T14:20:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("second snapshot must store");
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/beta.rs"),
+                contents: b"beta".to_vec(),
+                timestamp: "2026-05-02T14:30:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("third snapshot must store");
+
+        let page = store
+            .query_snapshots(&SnapshotQuery {
+                relative_path: Some(PathBuf::from("src/alpha.rs")),
+                kind: Some(SnapshotKind::Raw),
+                page: 1,
+                page_size: 1,
+                ..SnapshotQuery::default()
+            })
+            .expect("filtered query must succeed");
+
+        assert_eq!(page.total_items, 2);
+        assert_eq!(page.total_pages, 2);
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, latest_alpha.id);
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn query_snapshots_supports_time_range_filtering() {
+        let (base_dir, project_root) = create_test_roots("query-time");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/early.rs"),
+                contents: b"early".to_vec(),
+                timestamp: "2026-05-02T14:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("early snapshot must store");
+        let matching_snapshot = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/mid.rs"),
+                contents: b"mid".to_vec(),
+                timestamp: "2026-05-02T14:30:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("mid snapshot must store");
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/late.rs"),
+                contents: b"late".to_vec(),
+                timestamp: "2026-05-02T15:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("late snapshot must store");
+
+        let page = store
+            .query_snapshots(&SnapshotQuery {
+                kind: Some(SnapshotKind::Raw),
+                from_timestamp: Some("2026-05-02T14:15:00Z".to_string()),
+                to_timestamp: Some("2026-05-02T14:45:00Z".to_string()),
+                ..SnapshotQuery::default()
+            })
+            .expect("time-range query must succeed");
+
+        assert_eq!(page.total_items, 1);
+        assert_eq!(page.items[0].id, matching_snapshot.id);
 
         cleanup_test_roots(&base_dir);
     }

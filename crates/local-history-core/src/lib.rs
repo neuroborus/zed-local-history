@@ -19,4 +19,4 @@ pub use model::{
     HourBucket, ProjectId, ProjectRecord, RestoreOperationRecord, RestoreOutcome, SnapshotId,
     SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord,
 };
-pub use storage::{LocalHistoryStore, SnapshotWriteRequest};
+pub use storage::{LocalHistoryStore, SnapshotPage, SnapshotQuery, SnapshotWriteRequest};

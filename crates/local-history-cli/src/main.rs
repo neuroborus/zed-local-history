@@ -1,14 +1,16 @@
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use local_history_core::{
     default_data_dir, project_id_for_root, LocalHistoryStore, RestoreOutcome, SnapshotId,
-    SnapshotKind, SnapshotRecord, SnapshotWriteRequest, StorageLayout,
+    SnapshotKind, SnapshotPage, SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout,
 };
+use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -20,10 +22,24 @@ struct Cli {
     command: Commands,
 }
 
+#[derive(Debug, Clone, Args, Default)]
+struct SnapshotFilterArgs {
+    #[arg(long)]
+    file: Option<PathBuf>,
+    #[arg(long)]
+    from: Option<String>,
+    #[arg(long)]
+    to: Option<String>,
+    #[arg(long)]
+    hour: Option<String>,
+}
+
 #[derive(Debug, Subcommand)]
 enum Commands {
     Status {
         project_root: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     ViewRoot {
         project_root: PathBuf,
@@ -35,16 +51,28 @@ enum Commands {
     },
     Show {
         snapshot_id: String,
+        #[arg(long)]
+        json: bool,
     },
     Recent {
         project_root: PathBuf,
         #[arg(long, default_value_t = 10)]
         limit: usize,
+        #[command(flatten)]
+        filters: SnapshotFilterArgs,
+        #[arg(long)]
+        json: bool,
     },
     List {
         project_root: PathBuf,
+        #[arg(long, default_value_t = 1)]
+        page: usize,
         #[arg(long, default_value_t = 20)]
-        limit: usize,
+        page_size: usize,
+        #[command(flatten)]
+        filters: SnapshotFilterArgs,
+        #[arg(long)]
+        json: bool,
     },
     Restore {
         snapshot_id: Option<String>,
@@ -63,6 +91,17 @@ enum Commands {
         project_root: PathBuf,
         #[arg(long, default_value_t = 10)]
         limit: usize,
+        #[command(flatten)]
+        filters: SnapshotFilterArgs,
+        #[arg(long)]
+        json: bool,
+    },
+    Browse {
+        project_root: PathBuf,
+        #[arg(long, default_value_t = 10)]
+        page_size: usize,
+        #[command(flatten)]
+        filters: SnapshotFilterArgs,
     },
     RenderMarkdown {
         scope: String,
@@ -84,25 +123,27 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), String> {
     match cli.command {
-        Commands::Status { project_root } => {
-            print_status(&project_root);
-            Ok(())
-        }
+        Commands::Status { project_root, json } => print_status(&project_root, json),
         Commands::ViewRoot { project_root } => {
             let layout = layout_for(&project_root);
             println!("{}", layout.view_dir.display());
             Ok(())
         }
         Commands::Snapshot { project_root, file } => snapshot_file(&project_root, &file),
-        Commands::Show { snapshot_id } => show_snapshot(&SnapshotId::new(snapshot_id)),
+        Commands::Show { snapshot_id, json } => show_snapshot(&SnapshotId::new(snapshot_id), json),
         Commands::Recent {
             project_root,
             limit,
-        } => print_recent(&project_root, limit),
+            filters,
+            json,
+        } => print_recent(&project_root, limit, &filters, json),
         Commands::List {
             project_root,
-            limit,
-        } => print_recent(&project_root, limit),
+            page,
+            page_size,
+            filters,
+            json,
+        } => print_list(&project_root, page, page_size, &filters, json),
         Commands::Restore {
             snapshot_id,
             project_root,
@@ -113,7 +154,14 @@ fn run(cli: Cli) -> Result<(), String> {
         Commands::SafetyList {
             project_root,
             limit,
-        } => print_safety_list(&project_root, limit),
+            filters,
+            json,
+        } => print_safety_list(&project_root, limit, &filters, json),
+        Commands::Browse {
+            project_root,
+            page_size,
+            filters,
+        } => browse_snapshots(&project_root, page_size, &filters),
         Commands::RenderMarkdown {
             scope,
             project_root,
@@ -154,7 +202,7 @@ fn snapshot_file(project_root: &Path, relative_path: &Path) -> Result<(), String
     Ok(())
 }
 
-fn show_snapshot(snapshot_id: &SnapshotId) -> Result<(), String> {
+fn show_snapshot(snapshot_id: &SnapshotId, json_output: bool) -> Result<(), String> {
     let store = LocalHistoryStore::open_default_for_snapshot(snapshot_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
@@ -165,6 +213,16 @@ fn show_snapshot(snapshot_id: &SnapshotId) -> Result<(), String> {
     let contents = store
         .read_snapshot_content(snapshot_id)
         .map_err(|error| error.to_string())?;
+    let preview = render_snapshot_preview(&snapshot, &contents);
+
+    if json_output {
+        return print_json_value(&json!({
+            "snapshot": snapshot_json(&snapshot),
+            "project_id": store.project().id.as_str(),
+            "project_root": store.project().root.display().to_string(),
+            "content_preview": preview,
+        }));
+    }
 
     println!("snapshot_id={}", snapshot.id);
     println!("project_id={}", snapshot.project_id);
@@ -176,48 +234,174 @@ fn show_snapshot(snapshot_id: &SnapshotId) -> Result<(), String> {
     println!("size_bytes={}", snapshot.size_bytes);
     println!("blob_hash={}", snapshot.blob_hash);
     println!("content_preview:");
-    println!("{}", render_snapshot_preview(&snapshot, &contents));
+    println!("{preview}");
 
     Ok(())
 }
 
-fn print_recent(project_root: &Path, limit: usize) -> Result<(), String> {
+fn print_recent(
+    project_root: &Path,
+    limit: usize,
+    filters: &SnapshotFilterArgs,
+    json_output: bool,
+) -> Result<(), String> {
+    let query = snapshot_query_from_filters(filters, Some(SnapshotKind::Raw), 1, limit)?;
+    print_snapshot_query(project_root, &query, json_output, "Latest raw snapshots")
+}
+
+fn print_list(
+    project_root: &Path,
+    page: usize,
+    page_size: usize,
+    filters: &SnapshotFilterArgs,
+    json_output: bool,
+) -> Result<(), String> {
+    let query = snapshot_query_from_filters(filters, Some(SnapshotKind::Raw), page, page_size)?;
+    print_snapshot_query(project_root, &query, json_output, "Raw snapshot history")
+}
+
+fn print_safety_list(
+    project_root: &Path,
+    limit: usize,
+    filters: &SnapshotFilterArgs,
+    json_output: bool,
+) -> Result<(), String> {
+    let query = snapshot_query_from_filters(filters, Some(SnapshotKind::Safety), 1, limit)?;
+    print_snapshot_query(project_root, &query, json_output, "Latest safety snapshots")
+}
+
+fn print_snapshot_query(
+    project_root: &Path,
+    query: &SnapshotQuery,
+    json_output: bool,
+    heading: &str,
+) -> Result<(), String> {
     let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
-    let snapshots = store
-        .recent_raw_snapshots(limit)
+    let page = store
+        .query_snapshots(query)
         .map_err(|error| error.to_string())?;
 
-    println!("Latest raw snapshots");
+    if json_output {
+        return print_json_value(&snapshot_page_json(&store, query, &page));
+    }
+
+    println!("{heading}");
     println!();
 
-    if snapshots.is_empty() {
+    if page.items.is_empty() {
         println!("No snapshots found.");
         return Ok(());
     }
 
-    for (index, snapshot) in snapshots.iter().enumerate() {
+    println!(
+        "page={}/{} page_size={} total_items={}",
+        page.page,
+        std::cmp::max(page.total_pages, 1),
+        page.page_size,
+        page.total_items
+    );
+    println!();
+
+    for (index, snapshot) in page.items.iter().enumerate() {
         println!("{}", format_recent_line(index + 1, snapshot));
     }
 
     Ok(())
 }
 
-fn print_safety_list(project_root: &Path, limit: usize) -> Result<(), String> {
+fn browse_snapshots(
+    project_root: &Path,
+    page_size: usize,
+    filters: &SnapshotFilterArgs,
+) -> Result<(), String> {
     let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
-    let snapshots = store
-        .safety_snapshots(limit)
-        .map_err(|error| error.to_string())?;
+    let mut current_page = 1usize;
 
-    println!("Latest safety snapshots");
-    println!();
+    loop {
+        let query =
+            snapshot_query_from_filters(filters, Some(SnapshotKind::Raw), current_page, page_size)?;
+        let page = store
+            .query_snapshots(&query)
+            .map_err(|error| error.to_string())?;
 
-    if snapshots.is_empty() {
-        println!("No safety snapshots found.");
-        return Ok(());
+        println!("Raw snapshot browse");
+        println!(
+            "page={}/{} page_size={} total_items={}",
+            page.page,
+            std::cmp::max(page.total_pages, 1),
+            page.page_size,
+            page.total_items
+        );
+        println!();
+
+        if page.items.is_empty() {
+            println!("No snapshots found for the current filters.");
+        } else {
+            for (index, snapshot) in page.items.iter().enumerate() {
+                println!("{}", format_recent_line(index + 1, snapshot));
+            }
+        }
+
+        println!();
+        println!("Commands: n=next, p=previous, <number>=preview, q=quit");
+
+        let input = prompt("browse> ")?;
+
+        match input.as_str() {
+            "q" | "quit" => return Ok(()),
+            "n" | "next" => {
+                if current_page < std::cmp::max(page.total_pages, 1) {
+                    current_page += 1;
+                } else {
+                    println!("Already on the last page.");
+                }
+            }
+            "p" | "prev" | "previous" => {
+                if current_page > 1 {
+                    current_page -= 1;
+                } else {
+                    println!("Already on the first page.");
+                }
+            }
+            _ => match input.parse::<usize>() {
+                Ok(selection) => preview_and_maybe_restore(&store, &page, selection)?,
+                Err(_) => println!("Expected `n`, `p`, `q`, or a snapshot number."),
+            },
+        }
+
+        println!();
+    }
+}
+
+fn preview_and_maybe_restore(
+    store: &LocalHistoryStore,
+    page: &SnapshotPage,
+    selection: usize,
+) -> Result<(), String> {
+    if selection == 0 || selection > page.items.len() {
+        return Err(format!(
+            "snapshot [{selection}] is not available on this page"
+        ));
     }
 
-    for (index, snapshot) in snapshots.iter().enumerate() {
-        println!("{}", format_recent_line(index + 1, snapshot));
+    let snapshot = &page.items[selection - 1];
+    let contents = store
+        .read_snapshot_content(&snapshot.id)
+        .map_err(|error| error.to_string())?;
+
+    println!("selected snapshot");
+    println!("id={}", snapshot.id);
+    println!("path={}", snapshot.relative_path.display());
+    println!("timestamp={}", human_timestamp(&snapshot.timestamp));
+    println!("size_bytes={}", snapshot.size_bytes);
+    println!("content_preview:");
+    println!("{}", render_snapshot_preview(snapshot, &contents));
+
+    if confirm("Restore this snapshot? [y/N]: ")? {
+        let outcome = store
+            .restore_snapshot(&snapshot.id, &current_timestamp()?)
+            .map_err(|error| error.to_string())?;
+        print_restore_outcome("restored snapshot", &outcome);
     }
 
     Ok(())
@@ -310,20 +494,90 @@ fn print_restore_outcome(label: &str, outcome: &RestoreOutcome) {
     println!("restore_operation_id={}", outcome.operation.id);
 }
 
-fn layout_for(project_root: &Path) -> StorageLayout {
-    let project_id = project_id_for_root(project_root);
-    StorageLayout::for_project(default_data_dir(), project_id)
-}
-
-fn print_status(project_root: &Path) {
+fn print_status(project_root: &Path, json_output: bool) -> Result<(), String> {
     let project_id = project_id_for_root(project_root);
     let layout = StorageLayout::for_project(default_data_dir(), project_id.clone());
+
+    if json_output {
+        return print_json_value(&json!({
+            "project_root": project_root.display().to_string(),
+            "project_id": project_id.as_str(),
+            "data_dir": layout.project_dir.display().to_string(),
+            "database": layout.database_path.display().to_string(),
+            "view_root": layout.view_dir.display().to_string(),
+        }));
+    }
 
     println!("project_root={}", project_root.display());
     println!("project_id={project_id}");
     println!("data_dir={}", layout.project_dir.display());
     println!("database={}", layout.database_path.display());
     println!("view_root={}", layout.view_dir.display());
+
+    Ok(())
+}
+
+fn layout_for(project_root: &Path) -> StorageLayout {
+    let project_id = project_id_for_root(project_root);
+    StorageLayout::for_project(default_data_dir(), project_id)
+}
+
+fn snapshot_query_from_filters(
+    filters: &SnapshotFilterArgs,
+    kind: Option<SnapshotKind>,
+    page: usize,
+    page_size: usize,
+) -> Result<SnapshotQuery, String> {
+    let (from_timestamp, to_timestamp) =
+        resolve_time_filters(&filters.from, &filters.to, &filters.hour)?;
+
+    Ok(SnapshotQuery {
+        relative_path: filters
+            .file
+            .as_ref()
+            .map(|path| normalize_cli_relative_path(path))
+            .transpose()?,
+        from_timestamp,
+        to_timestamp,
+        kind,
+        page,
+        page_size,
+    })
+}
+
+fn resolve_time_filters(
+    from: &Option<String>,
+    to: &Option<String>,
+    hour: &Option<String>,
+) -> Result<(Option<String>, Option<String>), String> {
+    if let Some(hour) = hour {
+        if from.is_some() || to.is_some() {
+            return Err("`--hour` cannot be combined with `--from` or `--to`".to_string());
+        }
+
+        let hour_start = PrimitiveDateTime::parse(
+            hour,
+            &time::macros::format_description!("[year]-[month]-[day]T[hour]"),
+        )
+        .map_err(|error| format!("invalid ISO hour `{hour}`: {error}"))?
+        .assume_utc();
+        let hour_end = hour_start + Duration::hours(1);
+
+        return Ok((
+            Some(
+                hour_start
+                    .format(&Rfc3339)
+                    .map_err(|error| format!("failed to format hour start: {error}"))?,
+            ),
+            Some(
+                hour_end
+                    .format(&Rfc3339)
+                    .map_err(|error| format!("failed to format hour end: {error}"))?,
+            ),
+        ));
+    }
+
+    Ok((from.clone(), to.clone()))
 }
 
 fn normalize_cli_relative_path(path: &Path) -> Result<PathBuf, String> {
@@ -413,10 +667,76 @@ fn render_snapshot_preview(snapshot: &SnapshotRecord, contents: &[u8]) -> String
     }
 }
 
+fn snapshot_json(snapshot: &SnapshotRecord) -> Value {
+    json!({
+        "id": snapshot.id.as_str(),
+        "project_id": snapshot.project_id.as_str(),
+        "relative_path": snapshot.relative_path.display().to_string(),
+        "blob_hash": snapshot.blob_hash.as_str(),
+        "size_bytes": snapshot.size_bytes,
+        "timestamp": snapshot.timestamp,
+        "kind": snapshot.kind.as_str(),
+        "captures_missing_file": snapshot.captures_missing_file,
+    })
+}
+
+fn snapshot_page_json(
+    store: &LocalHistoryStore,
+    query: &SnapshotQuery,
+    page: &SnapshotPage,
+) -> Value {
+    json!({
+        "project_id": store.project().id.as_str(),
+        "project_root": store.project().root.display().to_string(),
+        "query": {
+            "relative_path": query.relative_path.as_ref().map(|path| path.display().to_string()),
+            "from_timestamp": query.from_timestamp.clone(),
+            "to_timestamp": query.to_timestamp.clone(),
+            "kind": query.kind.as_ref().map(SnapshotKind::as_str),
+            "page": page.page,
+            "page_size": page.page_size,
+        },
+        "total_items": page.total_items,
+        "total_pages": page.total_pages,
+        "items": page.items.iter().map(snapshot_json).collect::<Vec<_>>(),
+    })
+}
+
+fn print_json_value(value: &Value) -> Result<(), String> {
+    let rendered = serde_json::to_string_pretty(value)
+        .map_err(|error| format!("failed to render JSON: {error}"))?;
+    println!("{rendered}");
+    Ok(())
+}
+
+fn prompt(label: &str) -> Result<String, String> {
+    print!("{label}");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("failed to flush stdout: {error}"))?;
+
+    let mut buffer = String::new();
+    io::stdin()
+        .read_line(&mut buffer)
+        .map_err(|error| format!("failed to read stdin: {error}"))?;
+
+    Ok(buffer.trim().to_string())
+}
+
+fn confirm(label: &str) -> Result<bool, String> {
+    let answer = prompt(label)?;
+
+    Ok(matches!(answer.as_str(), "y" | "Y" | "yes" | "YES"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{human_timestamp, render_preview, Cli, Commands};
+    use super::{
+        human_timestamp, render_preview, render_snapshot_preview, resolve_time_filters, Cli,
+        Commands, SnapshotFilterArgs,
+    };
     use clap::Parser;
+    use local_history_core::{ContentHash, ProjectId, SnapshotId, SnapshotKind, SnapshotRecord};
     use std::path::PathBuf;
 
     #[test]
@@ -442,6 +762,7 @@ mod tests {
             Commands::Recent {
                 project_root,
                 limit,
+                ..
             } => {
                 assert_eq!(project_root, PathBuf::from("."));
                 assert_eq!(limit, 25);
@@ -490,11 +811,74 @@ mod tests {
     }
 
     #[test]
+    fn parses_list_pagination_and_json_flag() {
+        let cli = Cli::try_parse_from([
+            "local-history",
+            "list",
+            ".",
+            "--page",
+            "2",
+            "--page-size",
+            "50",
+            "--json",
+        ])
+        .expect("CLI parse must succeed");
+
+        match cli.command {
+            Commands::List {
+                project_root,
+                page,
+                page_size,
+                json,
+                ..
+            } => {
+                assert_eq!(project_root, PathBuf::from("."));
+                assert_eq!(page, 2);
+                assert_eq!(page_size, 50);
+                assert!(json);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
     fn renders_binary_preview_without_utf8_garbage() {
         assert_eq!(
             render_preview(&[0, 159, 146, 150]),
             "[binary content omitted]"
         );
+    }
+
+    #[test]
+    fn renders_missing_snapshot_preview_marker() {
+        let snapshot = SnapshotRecord {
+            id: SnapshotId::new("snapshot-1"),
+            project_id: ProjectId::new("project-1"),
+            relative_path: PathBuf::from("src/missing.txt"),
+            blob_hash: ContentHash::new("hash"),
+            size_bytes: 0,
+            timestamp: "2026-05-02T14:18:51Z".to_string(),
+            kind: SnapshotKind::Safety,
+            captures_missing_file: true,
+        };
+
+        assert_eq!(
+            render_snapshot_preview(&snapshot, &[]),
+            "[missing file state]"
+        );
+    }
+
+    #[test]
+    fn resolves_hour_filter_to_closed_open_range() {
+        let filters = SnapshotFilterArgs {
+            hour: Some("2026-05-02T14".to_string()),
+            ..SnapshotFilterArgs::default()
+        };
+        let (from, to) =
+            resolve_time_filters(&filters.from, &filters.to, &filters.hour).expect("hour parse");
+
+        assert_eq!(from.as_deref(), Some("2026-05-02T14:00:00Z"));
+        assert_eq!(to.as_deref(), Some("2026-05-02T15:00:00Z"));
     }
 
     #[test]

@@ -40,10 +40,14 @@ Try the CLI recovery surfaces:
 ```bash
 cargo run -p local-history-cli -- snapshot . --file README.md
 cargo run -p local-history-cli -- recent .
+cargo run -p local-history-cli -- recent . --json
+cargo run -p local-history-cli -- list . --page 2 --page-size 20
+cargo run -p local-history-cli -- list . --file README.md --from 2026-05-02T14:00:00Z --to 2026-05-02T15:00:00Z --json
 cargo run -p local-history-cli -- show <snapshot-id>
 cargo run -p local-history-cli -- restore <snapshot-id>
 cargo run -p local-history-cli -- restore --project-root . --recent 1
 cargo run -p local-history-cli -- safety-list .
+cargo run -p local-history-cli -- browse .
 cargo run -p local-history-cli -- undo-restore .
 cargo run -p local-history-cli -- restore-last-safety .
 cargo run -p local-history-sidecar -- health
@@ -52,6 +56,10 @@ cargo run -p local-history-sidecar -- health
 Current CLI behavior:
 
 - `recent` lists raw user snapshots only, so safety snapshots do not pollute normal restore numbering.
+- `list` adds paginated browsing with `--page` and `--page-size`.
+- `recent`, `list`, `show`, `status`, and `safety-list` support `--json`.
+- `recent`, `list`, and `safety-list` support `--file`, `--from`, `--to`, and `--hour YYYY-MM-DDTHH`.
+- `browse` provides a minimal interactive recovery loop with next/previous navigation, snapshot preview, and restore confirmation.
 - `restore` always creates a safety snapshot first, records a restore operation, and then applies the target snapshot.
 - `undo-restore` replays the latest safety snapshot for the project.
 - `restore-last-safety` is an explicit escape hatch to restore the newest safety snapshot directly.
