@@ -1,9 +1,8 @@
-use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::ProjectId;
+use crate::{hashing::sha256_hex, ProjectId};
 
 pub fn project_id_for_root(project_root: &Path) -> ProjectId {
     project_id_from_root_and_salt(project_root, &machine_salt())
@@ -11,14 +10,10 @@ pub fn project_id_for_root(project_root: &Path) -> ProjectId {
 
 pub fn project_id_from_root_and_salt(project_root: &Path, machine_salt: &str) -> ProjectId {
     let normalized_root = normalize_project_root(project_root);
+    let combined = format!("{}\0{}", machine_salt, normalized_root.to_string_lossy());
+    let digest = sha256_hex(combined.as_bytes());
 
-    let mut hasher = Sha256::new();
-    hasher.update(machine_salt.as_bytes());
-    hasher.update([0]);
-    hasher.update(normalized_root.to_string_lossy().as_bytes());
-
-    let digest = hasher.finalize();
-    ProjectId::new(hex_string(&digest[..16]))
+    ProjectId::new(digest[..32].to_string())
 }
 
 pub fn normalize_project_root(project_root: &Path) -> PathBuf {
@@ -58,18 +53,6 @@ fn best_effort_machine_salt() -> String {
         .unwrap_or_default();
 
     format!("fallback:{host}:{user}:{}", home.display())
-}
-
-fn hex_string(bytes: &[u8]) -> String {
-    let mut hex = String::with_capacity(bytes.len() * 2);
-
-    for byte in bytes {
-        use std::fmt::Write as _;
-
-        let _ = write!(&mut hex, "{byte:02x}");
-    }
-
-    hex
 }
 
 #[cfg(test)]

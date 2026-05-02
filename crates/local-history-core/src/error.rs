@@ -1,0 +1,19 @@
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum StorageError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("SQLite error: {0}")]
+    Database(#[from] rusqlite::Error),
+
+    #[error("invalid relative path: {0}")]
+    InvalidRelativePath(String),
+
+    #[error("snapshot not found: {0}")]
+    SnapshotNotFound(String),
+
+    #[error("content blob not found: {0}")]
+    BlobNotFound(String),
+}

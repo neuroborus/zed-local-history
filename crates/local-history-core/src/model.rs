@@ -39,6 +39,12 @@ impl SnapshotId {
     }
 }
 
+impl fmt::Display for SnapshotId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ContentHash(String);
 
@@ -49,6 +55,12 @@ impl ContentHash {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl fmt::Display for ContentHash {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -73,6 +85,22 @@ pub enum SnapshotKind {
     Safety,
 }
 
+impl SnapshotKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Raw => "raw",
+            Self::Safety => "safety",
+        }
+    }
+
+    pub fn from_db_value(value: &str) -> Self {
+        match value {
+            "safety" => Self::Safety,
+            _ => Self::Raw,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotRecord {
     pub id: SnapshotId,
@@ -87,6 +115,18 @@ pub struct SnapshotRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompressionKind {
     Zstd,
+}
+
+impl CompressionKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Zstd => "zstd",
+        }
+    }
+
+    pub fn from_db_value(_value: &str) -> Self {
+        Self::Zstd
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

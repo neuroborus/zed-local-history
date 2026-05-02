@@ -1,8 +1,12 @@
+mod error;
+mod hashing;
 mod identity;
 mod ignore;
 mod layout;
 mod model;
+mod storage;
 
+pub use error::StorageError;
 pub use identity::{
     machine_salt, normalize_project_root, project_id_for_root, project_id_from_root_and_salt,
 };
@@ -15,3 +19,4 @@ pub use model::{
     HourBucket, ProjectId, ProjectRecord, RestoreOperationRecord, SnapshotId, SnapshotKind,
     SnapshotRecord, TimeSegment, TrackedFileRecord,
 };
+pub use storage::{LocalHistoryStore, SnapshotWriteRequest};
