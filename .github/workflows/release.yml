@@ -6,6 +6,9 @@ on:
       - "v*.*.*"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
@@ -15,19 +18,34 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact_name: local-history-x86_64-unknown-linux-gnu
+            release_archive_name: local-history-x86_64-unknown-linux-gnu.tar.gz
             binary_suffix: ""
+            sidecar_asset_stem: local-history-sidecar-x86_64-unknown-linux-gnu
+            sidecar_archive_name: local-history-sidecar-x86_64-unknown-linux-gnu.tar.gz
           - os: ubuntu-24.04
             artifact_name: local-history-x86_64-ubuntu-24.04
+            release_archive_name: local-history-x86_64-ubuntu-24.04.tar.gz
             binary_suffix: ""
+            sidecar_asset_stem: local-history-sidecar-x86_64-ubuntu-24.04
+            sidecar_archive_name: local-history-sidecar-x86_64-ubuntu-24.04.tar.gz
           - os: macos-13
             artifact_name: local-history-x86_64-apple-darwin
+            release_archive_name: local-history-x86_64-apple-darwin.tar.gz
             binary_suffix: ""
+            sidecar_asset_stem: local-history-sidecar-x86_64-apple-darwin
+            sidecar_archive_name: local-history-sidecar-x86_64-apple-darwin.tar.gz
           - os: macos-14
             artifact_name: local-history-aarch64-apple-darwin
+            release_archive_name: local-history-aarch64-apple-darwin.tar.gz
             binary_suffix: ""
+            sidecar_asset_stem: local-history-sidecar-aarch64-apple-darwin
+            sidecar_archive_name: local-history-sidecar-aarch64-apple-darwin.tar.gz
           - os: windows-latest
             artifact_name: local-history-x86_64-pc-windows-msvc
+            release_archive_name: local-history-x86_64-pc-windows-msvc.zip
             binary_suffix: ".exe"
+            sidecar_asset_stem: local-history-sidecar-x86_64-pc-windows-msvc
+            sidecar_archive_name: local-history-sidecar-x86_64-pc-windows-msvc.zip
 
     steps:
       - name: Checkout
@@ -47,8 +65,75 @@ jobs:
           cp target/release/local-history-sidecar${{ matrix.binary_suffix }} dist/
           cp README.md LICENSE dist/
 
-      - name: Upload artifact
+      - name: Package release bundle (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p package/${{ matrix.artifact_name }}
+          cp dist/local-history dist/local-history-sidecar dist/README.md dist/LICENSE package/${{ matrix.artifact_name }}/
+          tar -czf dist/${{ matrix.release_archive_name }} -C package ${{ matrix.artifact_name }}
+
+      - name: Package release bundle (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "package/${{ matrix.artifact_name }}" | Out-Null
+          Copy-Item "dist/local-history.exe" "package/${{ matrix.artifact_name }}/local-history.exe"
+          Copy-Item "dist/local-history-sidecar.exe" "package/${{ matrix.artifact_name }}/local-history-sidecar.exe"
+          Copy-Item "dist/README.md" "package/${{ matrix.artifact_name }}/README.md"
+          Copy-Item "dist/LICENSE" "package/${{ matrix.artifact_name }}/LICENSE"
+          Compress-Archive -Path "package/${{ matrix.artifact_name }}" -DestinationPath "dist/${{ matrix.release_archive_name }}" -Force
+
+      - name: Package sidecar archive (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p package/${{ matrix.sidecar_asset_stem }}
+          cp target/release/local-history-sidecar package/${{ matrix.sidecar_asset_stem }}/local-history-sidecar
+          tar -czf dist/${{ matrix.sidecar_archive_name }} -C package ${{ matrix.sidecar_asset_stem }}
+
+      - name: Package sidecar archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "package/${{ matrix.sidecar_asset_stem }}" | Out-Null
+          Copy-Item "target/release/local-history-sidecar.exe" "package/${{ matrix.sidecar_asset_stem }}/local-history-sidecar.exe"
+          Compress-Archive -Path "package/${{ matrix.sidecar_asset_stem }}" -DestinationPath "dist/${{ matrix.sidecar_archive_name }}" -Force
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: dist
+
+      - name: Upload release asset artifact
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.artifact_name }}
+          path: dist/${{ matrix.release_archive_name }}
+
+      - name: Upload sidecar release asset artifact
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.sidecar_asset_stem }}
+          path: dist/${{ matrix.sidecar_archive_name }}
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download release asset artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*

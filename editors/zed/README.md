@@ -17,7 +17,7 @@ Zed's documented MCP server support also creates a second possible integration r
 ## Current shape
 
 - `extension.toml` declares the extension manifest and slash commands.
-- `src/lib.rs` resolves `local-history-sidecar` from `PATH` and calls real sidecar commands from slash-command handlers.
+- `src/lib.rs` resolves `local-history-sidecar` from `PATH` for dev installs, otherwise downloads a matching GitHub release asset into the extension work directory and calls real sidecar commands from slash-command handlers.
 - The extension is kept outside the root workspace because it follows Zed's WebAssembly packaging model and will evolve on its own cadence.
 
 ## Planned responsibilities
@@ -48,11 +48,12 @@ Current behavior:
 - `view` exposes the generated Markdown view root path
 - `current-hour`, `previous-hour`, and `hour` call sidecar Markdown render commands and return the generated file path
 - `restore` calls `local-history-sidecar restore <snapshot-id>`
+- if `local-history-sidecar` is not on `PATH`, the extension tries to download the matching sidecar release asset for the current version from GitHub and reuse it from the extension work directory
 
 Current limitations:
 
 - the extension API does not provide a direct "open arbitrary external file path" action, so the MVP path is to expose the generated Markdown path instead of pretending it can always auto-open it
-- the extension currently expects `local-history-sidecar` to already be on `PATH`; automatic platform-specific download/install remains later-stage work
+- sidecar bootstrap currently depends on GitHub release assets with stable names; the workflow now produces those assets, but the full packaging/release story still belongs to later-stage release hardening
 
 If MCP integration is added, these commands may coexist with Agent Panel tools rather than being replaced by them.
 

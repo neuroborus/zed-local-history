@@ -1,7 +1,12 @@
+use std::fs;
+
 use zed::process::Command as ProcessCommand;
 use zed::serde_json::Value;
-use zed::{Architecture, Os};
+use zed::{Architecture, DownloadedFileType, GithubRelease, Os};
 use zed_extension_api as zed;
+
+const RELEASE_REPOSITORY: &str = "neuroborus/zed-local-history";
+const SIDECAR_BINARY_STEM: &str = "local-history-sidecar";
 
 struct LocalHistoryExtension;
 
@@ -104,6 +109,15 @@ impl zed::Extension for LocalHistoryExtension {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReleaseTarget {
+    platform_label: &'static str,
+    asset_stem: &'static str,
+    archive_name: &'static str,
+    binary_name: &'static str,
+    file_type: DownloadedFileType,
+}
+
 fn expect_no_args(command_name: &str, args: &[String]) -> Result<(), String> {
     if args.is_empty() {
         Ok(())
@@ -153,23 +167,113 @@ fn run_sidecar_json(worktree: &zed::Worktree, args: Vec<String>) -> Result<Value
 fn resolve_sidecar_binary(worktree: &zed::Worktree) -> Result<String, String> {
     let (os, architecture) = zed::current_platform();
 
-    if let Some(path) = worktree.which("local-history-sidecar") {
+    if let Some(path) = sidecar_on_path(worktree, os) {
         return Ok(path);
     }
 
-    if matches!(os, Os::Windows) {
-        if let Some(path) = worktree.which("local-history-sidecar.exe") {
-            return Ok(path);
+    let target = release_target(os, architecture)?;
+    let cached_path = cached_sidecar_path(target);
+
+    if binary_exists(&cached_path) {
+        ensure_binary_executable(target, &cached_path)?;
+        return Ok(cached_path);
+    }
+
+    install_sidecar_release(target)?;
+    ensure_binary_executable(target, &cached_path)?;
+
+    if binary_exists(&cached_path) {
+        Ok(cached_path)
+    } else {
+        Err(format!(
+            "downloaded `{}` for {}, but `{cached_path}` was not found after extraction",
+            target.archive_name, target.platform_label,
+        ))
+    }
+}
+
+fn install_sidecar_release(target: ReleaseTarget) -> Result<(), String> {
+    let release =
+        zed::github_release_by_tag_name(RELEASE_REPOSITORY, &release_tag()).map_err(|error| {
+            format!(
+                "failed to resolve GitHub release {} from {RELEASE_REPOSITORY}: {error}",
+                release_tag()
+            )
+        })?;
+    let asset = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == target.archive_name)
+        .ok_or_else(|| missing_asset_error(target, &release))?;
+    let install_dir = install_directory_name();
+
+    zed::download_file(&asset.download_url, &install_dir, target.file_type)
+        .map_err(|error| format!("failed to download {}: {error}", asset.name))?;
+    cleanup_old_installs(&install_dir)?;
+
+    Ok(())
+}
+
+fn sidecar_on_path(worktree: &zed::Worktree, os: Os) -> Option<String> {
+    worktree.which(SIDECAR_BINARY_STEM).or_else(|| {
+        if matches!(os, Os::Windows) {
+            worktree.which("local-history-sidecar.exe")
+        } else {
+            None
+        }
+    })
+}
+
+fn ensure_binary_executable(target: ReleaseTarget, binary_path: &str) -> Result<(), String> {
+    if matches!(target.file_type, DownloadedFileType::Zip) {
+        return Ok(());
+    }
+
+    zed::make_file_executable(binary_path).map_err(|error| {
+        format!("failed to make downloaded sidecar executable at {binary_path}: {error}")
+    })
+}
+
+fn binary_exists(path: &str) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+}
+
+fn cleanup_old_installs(current_install_dir: &str) -> Result<(), String> {
+    let entries = fs::read_dir(".")
+        .map_err(|error| format!("failed to list extension work directory: {error}"))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("failed to read workdir entry: {error}"))?;
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+
+        if file_name.starts_with("local-history-sidecar-")
+            && file_name != current_install_dir
+            && entry.path().is_dir()
+        {
+            fs::remove_dir_all(entry.path()).map_err(|error| {
+                format!(
+                    "failed to remove stale sidecar install {}: {error}",
+                    file_name
+                )
+            })?;
         }
     }
 
-    Err(format!(
-        "local-history-sidecar is not on PATH for {}. Expected binary `{}{}` from release artifact `{}` or a dev build available on PATH.",
-        platform_label(os, architecture),
-        "local-history-sidecar",
-        binary_suffix(os),
-        expected_release_artifact(os, architecture),
-    ))
+    Ok(())
+}
+
+fn missing_asset_error(target: ReleaseTarget, release: &GithubRelease) -> String {
+    let available = release
+        .assets
+        .iter()
+        .map(|asset| asset.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "release {} for {} does not contain `{}`. Available assets: [{}]",
+        release.version, target.platform_label, target.archive_name, available
+    )
 }
 
 fn render_status_output(binary: &str, value: &Value) -> String {
@@ -233,20 +337,57 @@ fn render_restore_output(value: &Value) -> String {
     )
 }
 
-fn expected_release_artifact(os: Os, architecture: Architecture) -> &'static str {
-    match (os, architecture) {
-        (Os::Mac, Architecture::Aarch64) => "local-history-aarch64-apple-darwin",
-        (Os::Mac, Architecture::X8664) => "local-history-x86_64-apple-darwin",
-        (Os::Linux, Architecture::X8664) => "local-history-x86_64-unknown-linux-gnu",
-        (Os::Windows, Architecture::X8664) => "local-history-x86_64-pc-windows-msvc",
-        _ => "local-history release artifact for this platform is not defined yet",
-    }
+fn release_tag() -> String {
+    format!("v{}", env!("CARGO_PKG_VERSION"))
 }
 
-fn binary_suffix(os: Os) -> &'static str {
-    match os {
-        Os::Windows => ".exe",
-        _ => "",
+fn install_directory_name() -> String {
+    format!("local-history-sidecar-{}", env!("CARGO_PKG_VERSION"))
+}
+
+fn cached_sidecar_path(target: ReleaseTarget) -> String {
+    format!(
+        "{}/{}/{}",
+        install_directory_name(),
+        target.asset_stem,
+        target.binary_name
+    )
+}
+
+fn release_target(os: Os, architecture: Architecture) -> Result<ReleaseTarget, String> {
+    match (os, architecture) {
+        (Os::Mac, Architecture::Aarch64) => Ok(ReleaseTarget {
+            platform_label: "macOS aarch64",
+            asset_stem: "local-history-sidecar-aarch64-apple-darwin",
+            archive_name: "local-history-sidecar-aarch64-apple-darwin.tar.gz",
+            binary_name: "local-history-sidecar",
+            file_type: DownloadedFileType::GzipTar,
+        }),
+        (Os::Mac, Architecture::X8664) => Ok(ReleaseTarget {
+            platform_label: "macOS x86_64",
+            asset_stem: "local-history-sidecar-x86_64-apple-darwin",
+            archive_name: "local-history-sidecar-x86_64-apple-darwin.tar.gz",
+            binary_name: "local-history-sidecar",
+            file_type: DownloadedFileType::GzipTar,
+        }),
+        (Os::Linux, Architecture::X8664) => Ok(ReleaseTarget {
+            platform_label: "Linux x86_64",
+            asset_stem: "local-history-sidecar-x86_64-unknown-linux-gnu",
+            archive_name: "local-history-sidecar-x86_64-unknown-linux-gnu.tar.gz",
+            binary_name: "local-history-sidecar",
+            file_type: DownloadedFileType::GzipTar,
+        }),
+        (Os::Windows, Architecture::X8664) => Ok(ReleaseTarget {
+            platform_label: "Windows x86_64",
+            asset_stem: "local-history-sidecar-x86_64-pc-windows-msvc",
+            archive_name: "local-history-sidecar-x86_64-pc-windows-msvc.zip",
+            binary_name: "local-history-sidecar.exe",
+            file_type: DownloadedFileType::Zip,
+        }),
+        _ => Err(format!(
+            "local-history sidecar bootstrap is not defined for {}",
+            platform_label(os, architecture)
+        )),
     }
 }
 
@@ -296,6 +437,32 @@ fn json_value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
     }
 
     Some(current)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{install_directory_name, release_tag, release_target, ReleaseTarget};
+    use zed_extension_api::{Architecture, DownloadedFileType, Os};
+
+    #[test]
+    fn maps_linux_release_target() {
+        assert_eq!(
+            release_target(Os::Linux, Architecture::X8664).expect("linux target must exist"),
+            ReleaseTarget {
+                platform_label: "Linux x86_64",
+                asset_stem: "local-history-sidecar-x86_64-unknown-linux-gnu",
+                archive_name: "local-history-sidecar-x86_64-unknown-linux-gnu.tar.gz",
+                binary_name: "local-history-sidecar",
+                file_type: DownloadedFileType::GzipTar,
+            }
+        );
+    }
+
+    #[test]
+    fn version_helpers_follow_package_version() {
+        assert_eq!(release_tag(), "v0.1.0");
+        assert_eq!(install_directory_name(), "local-history-sidecar-0.1.0");
+    }
 }
 
 zed::register_extension!(LocalHistoryExtension);
