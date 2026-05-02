@@ -11,7 +11,7 @@ This repository is set up around the product direction captured in [agents/GOALS
 
 The documented architecture also leaves room for an MCP server surface for Zed Agent workflows, but that remains separate from the current MVP path.
 
-The repository now has a real storage-backed recovery path for manual CLI snapshots and safe restore flows, a polling-based sidecar watcher with `watch`, `ensure-daemon`, and `status`, and generated Markdown history views for hour/segment browsing. Full Zed-side lifecycle wiring is still later-stage work.
+The repository now has a real storage-backed recovery path for manual CLI snapshots and safe restore flows, a polling-based sidecar watcher with `watch`, `ensure-daemon`, and `status`, generated Markdown history views for hour/segment browsing, and a first real Zed slash-command integration layer. Fully automatic sidecar download/installation is still later-stage work.
 
 ## What is here
 
@@ -101,7 +101,7 @@ The `editors/zed` package follows the current documented Zed extension shape:
 
 Zed also supports MCP servers for the Agent Panel, either through direct user `context_servers` settings or through extension-managed MCP server registration. The project docs treat that as an additive integration path, not as a replacement for CLI and Markdown recovery.
 
-The richer UX described in the product docs, such as opening generated Markdown directly or managing the sidecar lifecycle entirely from editor actions, still needs Stage 1 validation against the current Zed extension API.
+The current extension no longer returns placeholder text. It resolves `local-history-sidecar` from `PATH`, calls real sidecar commands for status / watcher startup / hour rendering / restore, and exposes generated Markdown paths back to the user through slash-command output. Because the current extension API does not expose a direct "open arbitrary external file" action, the MVP path is to print or reveal the generated Markdown path in a usable way rather than pretending it can always be opened automatically.
 
 The root workspace is pinned to Rust `1.75.0` so the core/cli/sidecar scaffold can compile immediately in conservative environments. The Zed extension package keeps its own `stable` toolchain in `editors/zed/rust-toolchain.toml`, because `wasm32-wasip2` support belongs to the newer extension path and should not force the native workspace to move in lockstep.
 

@@ -10,14 +10,14 @@ The project goals are intentionally filesystem-first:
 - the CLI and generated Markdown must work without Zed;
 - editor integration should stay small and replaceable.
 
-The current Zed extension scaffold reserves a realistic integration surface without pretending that the product UX is already implemented.
+The current Zed extension is no longer pure placeholder text, but it still stays intentionally thin.
 
 Zed's documented MCP server support also creates a second possible integration route: the extension may register a local-history MCP server for the Agent Panel, or users may connect such a server directly through their `context_servers` settings. That path is documented as additive to the current CLI/Markdown workflow.
 
 ## Current shape
 
-- `extension.toml` declares the extension manifest and starter slash commands.
-- `src/lib.rs` provides a minimal Rust extension implementation.
+- `extension.toml` declares the extension manifest and slash commands.
+- `src/lib.rs` resolves `local-history-sidecar` from `PATH` and calls real sidecar commands from slash-command handlers.
 - The extension is kept outside the root workspace because it follows Zed's WebAssembly packaging model and will evolve on its own cadence.
 
 ## Planned responsibilities
@@ -34,10 +34,25 @@ The native sidecar now already exposes real JSON `health`, `status`, `watch`, an
 ## Current commands
 
 - `/local-history-status`
-- `/local-history-recent`
 - `/local-history-view`
+- `/local-history-start-watcher`
+- `/local-history-current-hour`
+- `/local-history-previous-hour`
+- `/local-history-hour <YYYY-MM-DDTHH>`
+- `/local-history-restore <snapshot-id>`
 
-These commands currently return bootstrap text only. They exist to anchor the intended Zed-side workflow while Stage 1 API validation happens.
+Current behavior:
+
+- `status` calls `local-history-sidecar status <project-root>`
+- `start-watcher` calls `local-history-sidecar ensure-daemon <project-root>`
+- `view` exposes the generated Markdown view root path
+- `current-hour`, `previous-hour`, and `hour` call sidecar Markdown render commands and return the generated file path
+- `restore` calls `local-history-sidecar restore <snapshot-id>`
+
+Current limitations:
+
+- the extension API does not provide a direct "open arbitrary external file path" action, so the MVP path is to expose the generated Markdown path instead of pretending it can always auto-open it
+- the extension currently expects `local-history-sidecar` to already be on `PATH`; automatic platform-specific download/install remains later-stage work
 
 If MCP integration is added, these commands may coexist with Agent Panel tools rather than being replaced by them.
 

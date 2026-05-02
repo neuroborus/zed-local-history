@@ -6,8 +6,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use local_history_core::{
-    matches_default_ignored_path, normalize_project_root, LocalHistoryStore, SnapshotKind,
-    SnapshotWriteRequest, StorageLayout,
+    matches_default_ignored_path, normalize_project_root, LocalHistoryStore, SnapshotId,
+    SnapshotKind, SnapshotWriteRequest, StorageLayout,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -184,6 +184,93 @@ pub fn status(project_root: &Path) -> RuntimeResult<Value> {
         store.project().id.as_str(),
         read_status(status_path(store.layout()))?,
     ))
+}
+
+pub fn view_root(project_root: &Path) -> RuntimeResult<Value> {
+    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
+    let project_root = store.project().root.clone();
+
+    Ok(json!({
+        "status": "ok",
+        "project_root": project_root.display().to_string(),
+        "project_id": store.project().id.as_str(),
+        "view_root": store.layout().view_dir.display().to_string(),
+    }))
+}
+
+pub fn render_current_hour_markdown(project_root: &Path) -> RuntimeResult<Value> {
+    let current_hour = current_hour_string(0)?;
+    render_hour_markdown(project_root, &current_hour)
+}
+
+pub fn render_previous_hour_markdown(project_root: &Path) -> RuntimeResult<Value> {
+    let previous_hour = current_hour_string(-1)?;
+    render_hour_markdown(project_root, &previous_hour)
+}
+
+pub fn render_hour_markdown(project_root: &Path, hour: &str) -> RuntimeResult<Value> {
+    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
+    let project_root = store.project().root.clone();
+    let entry = store
+        .render_hour_markdown(hour, &current_timestamp()?)
+        .map_err(|error| error.to_string())?;
+    let markdown_path = store.layout().view_dir.join(&entry.relative_markdown_path);
+
+    Ok(json!({
+        "status": "ok",
+        "scope": "hour",
+        "hour": hour,
+        "project_root": project_root.display().to_string(),
+        "project_id": store.project().id.as_str(),
+        "view_root": store.layout().view_dir.display().to_string(),
+        "markdown_path": markdown_path.display().to_string(),
+        "relative_markdown_path": entry.relative_markdown_path.display().to_string(),
+    }))
+}
+
+pub fn render_segment_markdown(project_root: &Path, from: &str, to: &str) -> RuntimeResult<Value> {
+    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
+    let project_root = store.project().root.clone();
+    let entry = store
+        .render_segment_markdown(from, to, &current_timestamp()?)
+        .map_err(|error| error.to_string())?;
+    let markdown_path = store.layout().view_dir.join(&entry.relative_markdown_path);
+
+    Ok(json!({
+        "status": "ok",
+        "scope": "segment",
+        "from": from,
+        "to": to,
+        "project_root": project_root.display().to_string(),
+        "project_id": store.project().id.as_str(),
+        "view_root": store.layout().view_dir.display().to_string(),
+        "markdown_path": markdown_path.display().to_string(),
+        "relative_markdown_path": entry.relative_markdown_path.display().to_string(),
+    }))
+}
+
+pub fn restore_snapshot(snapshot_id: &str) -> RuntimeResult<Value> {
+    let snapshot_id = SnapshotId::new(snapshot_id.to_string());
+    let store = LocalHistoryStore::open_default_for_snapshot(&snapshot_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
+    let project_root = store.project().root.clone();
+    let outcome = store
+        .restore_snapshot(&snapshot_id, &current_timestamp()?)
+        .map_err(|error| error.to_string())?;
+
+    Ok(json!({
+        "status": "ok",
+        "project_root": project_root.display().to_string(),
+        "project_id": store.project().id.as_str(),
+        "restored_snapshot_id": outcome.restored_snapshot.id.as_str(),
+        "restored_snapshot_timestamp": outcome.restored_snapshot.timestamp,
+        "restored_path": outcome.restored_path.display().to_string(),
+        "safety_snapshot_id": outcome.safety_snapshot.id.as_str(),
+        "safety_snapshot_timestamp": outcome.safety_snapshot.timestamp,
+        "previous_file_existed": outcome.operation.previous_file_existed,
+        "restore_operation_id": outcome.operation.id,
+    }))
 }
 
 fn watcher_status_value(
@@ -447,6 +534,16 @@ fn current_timestamp() -> RuntimeResult<String> {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|error| format!("failed to format timestamp: {error}"))
+}
+
+fn current_hour_string(hour_offset: i64) -> RuntimeResult<String> {
+    let timestamp = OffsetDateTime::now_utc() + time::Duration::hours(hour_offset);
+
+    timestamp
+        .format(&time::macros::format_description!(
+            "[year]-[month]-[day]T[hour]"
+        ))
+        .map_err(|error| format!("failed to format ISO hour: {error}"))
 }
 
 fn current_unix_seconds() -> u64 {
