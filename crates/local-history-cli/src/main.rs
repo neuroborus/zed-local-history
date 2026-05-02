@@ -5,8 +5,9 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use local_history_core::{
-    default_data_dir, project_id_for_root, LocalHistoryStore, RestoreOutcome, SnapshotId,
-    SnapshotKind, SnapshotPage, SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout,
+    default_data_dir, project_id_for_root, HourHistory, LocalHistoryStore, RestoreOutcome,
+    SegmentHistory, SnapshotId, SnapshotKind, SnapshotPage, SnapshotQuery, SnapshotRecord,
+    SnapshotWriteRequest, StorageLayout, WindowedFileHistory,
 };
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
@@ -20,6 +21,42 @@ use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Debug, Subcommand)]
+enum HistoryCommands {
+    Hour {
+        project_root: PathBuf,
+        #[arg(long)]
+        hour: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Segment {
+        project_root: PathBuf,
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RenderMarkdownCommands {
+    Hour {
+        project_root: PathBuf,
+        #[arg(long)]
+        hour: String,
+    },
+    Segment {
+        project_root: PathBuf,
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+    },
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -53,6 +90,10 @@ enum Commands {
         snapshot_id: String,
         #[arg(long)]
         json: bool,
+    },
+    History {
+        #[command(subcommand)]
+        command: HistoryCommands,
     },
     Recent {
         project_root: PathBuf,
@@ -103,9 +144,12 @@ enum Commands {
         #[command(flatten)]
         filters: SnapshotFilterArgs,
     },
-    RenderMarkdown {
-        scope: String,
+    RebuildMarkdownView {
         project_root: PathBuf,
+    },
+    RenderMarkdown {
+        #[command(subcommand)]
+        command: RenderMarkdownCommands,
     },
 }
 
@@ -131,6 +175,7 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Commands::Snapshot { project_root, file } => snapshot_file(&project_root, &file),
         Commands::Show { snapshot_id, json } => show_snapshot(&SnapshotId::new(snapshot_id), json),
+        Commands::History { command } => run_history_command(command),
         Commands::Recent {
             project_root,
             limit,
@@ -162,15 +207,8 @@ fn run(cli: Cli) -> Result<(), String> {
             page_size,
             filters,
         } => browse_snapshots(&project_root, page_size, &filters),
-        Commands::RenderMarkdown {
-            scope,
-            project_root,
-        } => {
-            let layout = layout_for(&project_root);
-            let target = layout.view_dir.join(scope).with_extension("md");
-            println!("{}", target.display());
-            Ok(())
-        }
+        Commands::RebuildMarkdownView { project_root } => rebuild_markdown_view(&project_root),
+        Commands::RenderMarkdown { command } => run_render_markdown_command(command),
     }
 }
 
@@ -198,6 +236,80 @@ fn snapshot_file(project_root: &Path, relative_path: &Path) -> Result<(), String
     println!("timestamp={}", human_timestamp(&snapshot.timestamp));
     println!("blob_hash={}", snapshot.blob_hash);
     println!("size_bytes={}", snapshot.size_bytes);
+
+    Ok(())
+}
+
+fn run_history_command(command: HistoryCommands) -> Result<(), String> {
+    match command {
+        HistoryCommands::Hour {
+            project_root,
+            hour,
+            json,
+        } => print_hour_history(&project_root, &hour, json),
+        HistoryCommands::Segment {
+            project_root,
+            from,
+            to,
+            json,
+        } => print_segment_history(&project_root, &from, &to, json),
+    }
+}
+
+fn run_render_markdown_command(command: RenderMarkdownCommands) -> Result<(), String> {
+    match command {
+        RenderMarkdownCommands::Hour { project_root, hour } => {
+            render_hour_markdown(&project_root, &hour)
+        }
+        RenderMarkdownCommands::Segment {
+            project_root,
+            from,
+            to,
+        } => render_segment_markdown(&project_root, &from, &to),
+    }
+}
+
+fn render_hour_markdown(project_root: &Path, hour: &str) -> Result<(), String> {
+    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
+    let entry = store
+        .render_hour_markdown(hour, &current_timestamp()?)
+        .map_err(|error| error.to_string())?;
+    let layout = layout_for(project_root);
+
+    println!(
+        "{}",
+        layout.view_dir.join(entry.relative_markdown_path).display()
+    );
+
+    Ok(())
+}
+
+fn render_segment_markdown(project_root: &Path, from: &str, to: &str) -> Result<(), String> {
+    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
+    let entry = store
+        .render_segment_markdown(from, to, &current_timestamp()?)
+        .map_err(|error| error.to_string())?;
+    let layout = layout_for(project_root);
+
+    println!(
+        "{}",
+        layout.view_dir.join(entry.relative_markdown_path).display()
+    );
+
+    Ok(())
+}
+
+fn rebuild_markdown_view(project_root: &Path) -> Result<(), String> {
+    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
+    let entries = store
+        .rebuild_markdown_view(&current_timestamp()?)
+        .map_err(|error| error.to_string())?;
+    let layout = layout_for(project_root);
+
+    println!("rebuild complete");
+    println!("view_root={}", layout.view_dir.display());
+    println!("generated_entries={}", entries.len());
+    println!("index={}", layout.view_dir.join("README.md").display());
 
     Ok(())
 }
@@ -237,6 +349,87 @@ fn show_snapshot(snapshot_id: &SnapshotId, json_output: bool) -> Result<(), Stri
     println!("{preview}");
 
     Ok(())
+}
+
+fn print_hour_history(project_root: &Path, hour: &str, json_output: bool) -> Result<(), String> {
+    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
+    let history = store
+        .history_for_hour(hour)
+        .map_err(|error| error.to_string())?;
+
+    if json_output {
+        return print_json_value(&hour_history_json(&store, &history));
+    }
+
+    println!(
+        "Hour history {} -> {}",
+        human_timestamp(&history.hour.from),
+        human_timestamp(&history.hour.to)
+    );
+    println!();
+
+    for segment in &history.segments {
+        print_segment_history_text(segment);
+    }
+
+    Ok(())
+}
+
+fn print_segment_history(
+    project_root: &Path,
+    from: &str,
+    to: &str,
+    json_output: bool,
+) -> Result<(), String> {
+    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
+    let history = store
+        .history_for_segment(from, to)
+        .map_err(|error| error.to_string())?;
+
+    if json_output {
+        return print_json_value(&segment_history_json(&store, &history));
+    }
+
+    print_segment_history_text(&history);
+    Ok(())
+}
+
+fn print_segment_history_text(history: &SegmentHistory) {
+    println!(
+        "[{}] {} -> {}",
+        history.segment.label,
+        human_timestamp(&history.segment.from),
+        human_timestamp(&history.segment.to)
+    );
+
+    if history.affected_files.is_empty() {
+        println!("No snapshots in this segment.");
+        println!();
+        return;
+    }
+
+    for file_history in &history.affected_files {
+        println!(
+            "{} ({} snapshot{})",
+            file_history.relative_path.display(),
+            file_history.snapshot_count,
+            if file_history.snapshot_count == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+
+        for snapshot in &file_history.snapshots {
+            println!(
+                "  {}  {}",
+                human_timestamp(&snapshot.timestamp),
+                short_id(snapshot.id.as_str())
+            );
+        }
+    }
+
+    println!();
 }
 
 fn print_recent(
@@ -702,6 +895,60 @@ fn snapshot_page_json(
     })
 }
 
+fn windowed_file_history_json(file_history: &WindowedFileHistory) -> Value {
+    json!({
+        "relative_path": file_history.relative_path.display().to_string(),
+        "snapshot_count": file_history.snapshot_count,
+        "snapshots": file_history.snapshots.iter().map(snapshot_json).collect::<Vec<_>>(),
+    })
+}
+
+fn segment_history_json(store: &LocalHistoryStore, history: &SegmentHistory) -> Value {
+    json!({
+        "project_id": store.project().id.as_str(),
+        "project_root": store.project().root.display().to_string(),
+        "segment": {
+            "label": &history.segment.label,
+            "from": &history.segment.from,
+            "to": &history.segment.to,
+        },
+        "affected_files": history
+            .affected_files
+            .iter()
+            .map(windowed_file_history_json)
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn hour_history_json(store: &LocalHistoryStore, history: &HourHistory) -> Value {
+    json!({
+        "project_id": store.project().id.as_str(),
+        "project_root": store.project().root.display().to_string(),
+        "hour": {
+            "from": &history.hour.from,
+            "to": &history.hour.to,
+        },
+        "segments": history
+            .segments
+            .iter()
+            .map(|segment| {
+                json!({
+                    "segment": {
+                        "label": &segment.segment.label,
+                        "from": &segment.segment.from,
+                        "to": &segment.segment.to,
+                    },
+                    "affected_files": segment
+                        .affected_files
+                        .iter()
+                        .map(windowed_file_history_json)
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
 fn print_json_value(value: &Value) -> Result<(), String> {
     let rendered = serde_json::to_string_pretty(value)
         .map_err(|error| format!("failed to render JSON: {error}"))?;
@@ -733,7 +980,7 @@ fn confirm(label: &str) -> Result<bool, String> {
 mod tests {
     use super::{
         human_timestamp, render_preview, render_snapshot_preview, resolve_time_filters, Cli,
-        Commands, SnapshotFilterArgs,
+        Commands, HistoryCommands, RenderMarkdownCommands, SnapshotFilterArgs,
     };
     use clap::Parser;
     use local_history_core::{ContentHash, ProjectId, SnapshotId, SnapshotKind, SnapshotRecord};
@@ -836,6 +1083,106 @@ mod tests {
                 assert_eq!(page, 2);
                 assert_eq!(page_size, 50);
                 assert!(json);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_history_hour_command() {
+        let cli = Cli::try_parse_from([
+            "local-history",
+            "history",
+            "hour",
+            ".",
+            "--hour",
+            "2026-05-02T14",
+            "--json",
+        ])
+        .expect("CLI parse must succeed");
+
+        match cli.command {
+            Commands::History { command } => match command {
+                HistoryCommands::Hour {
+                    project_root,
+                    hour,
+                    json,
+                } => {
+                    assert_eq!(project_root, PathBuf::from("."));
+                    assert_eq!(hour, "2026-05-02T14");
+                    assert!(json);
+                }
+                other => panic!("unexpected history command: {other:?}"),
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_history_segment_command() {
+        let cli = Cli::try_parse_from([
+            "local-history",
+            "history",
+            "segment",
+            ".",
+            "--from",
+            "2026-05-02T14:10:00Z",
+            "--to",
+            "2026-05-02T14:20:00Z",
+        ])
+        .expect("CLI parse must succeed");
+
+        match cli.command {
+            Commands::History { command } => match command {
+                HistoryCommands::Segment {
+                    project_root,
+                    from,
+                    to,
+                    json,
+                } => {
+                    assert_eq!(project_root, PathBuf::from("."));
+                    assert_eq!(from, "2026-05-02T14:10:00Z");
+                    assert_eq!(to, "2026-05-02T14:20:00Z");
+                    assert!(!json);
+                }
+                other => panic!("unexpected history command: {other:?}"),
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_render_markdown_hour_command() {
+        let cli = Cli::try_parse_from([
+            "local-history",
+            "render-markdown",
+            "hour",
+            ".",
+            "--hour",
+            "2026-05-02T14",
+        ])
+        .expect("CLI parse must succeed");
+
+        match cli.command {
+            Commands::RenderMarkdown { command } => match command {
+                RenderMarkdownCommands::Hour { project_root, hour } => {
+                    assert_eq!(project_root, PathBuf::from("."));
+                    assert_eq!(hour, "2026-05-02T14");
+                }
+                other => panic!("unexpected render-markdown command: {other:?}"),
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_rebuild_markdown_view_command() {
+        let cli = Cli::try_parse_from(["local-history", "rebuild-markdown-view", "."])
+            .expect("CLI parse must succeed");
+
+        match cli.command {
+            Commands::RebuildMarkdownView { project_root } => {
+                assert_eq!(project_root, PathBuf::from("."));
             }
             other => panic!("unexpected command: {other:?}"),
         }

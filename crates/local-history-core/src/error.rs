@@ -22,4 +22,10 @@ pub enum StorageError {
 
     #[error("safety snapshot not found for project: {0}")]
     SafetySnapshotNotFound(String),
+
+    #[error("invalid timestamp: {0}")]
+    InvalidTimestamp(String),
+
+    #[error("invalid time window: {0}")]
+    InvalidTimeWindow(String),
 }

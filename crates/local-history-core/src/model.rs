@@ -173,6 +173,25 @@ pub struct TimeSegment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowedFileHistory {
+    pub relative_path: PathBuf,
+    pub snapshot_count: usize,
+    pub snapshots: Vec<SnapshotRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SegmentHistory {
+    pub segment: TimeSegment,
+    pub affected_files: Vec<WindowedFileHistory>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HourHistory {
+    pub hour: HourBucket,
+    pub segments: Vec<SegmentHistory>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedMarkdownViewEntry {
     pub relative_markdown_path: PathBuf,
     pub title: String,
@@ -202,8 +221,9 @@ pub fn segment_label(hour: u8, minute: u8) -> Option<String> {
 mod tests {
     use super::{
         segment_label, CompressionKind, ContentBlobRecord, ContentHash, GeneratedMarkdownViewEntry,
-        HourBucket, ProjectId, ProjectRecord, RestoreOperationRecord, RestoreOutcome, SnapshotId,
-        SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord,
+        HourBucket, HourHistory, ProjectId, ProjectRecord, RestoreOperationRecord, RestoreOutcome,
+        SegmentHistory, SnapshotId, SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord,
+        WindowedFileHistory,
     };
     use std::path::PathBuf;
 
@@ -284,6 +304,19 @@ mod tests {
             from: "2026-05-02T14:10:00+02:00".to_string(),
             to: "2026-05-02T14:20:00+02:00".to_string(),
         };
+        let file_history = WindowedFileHistory {
+            relative_path: tracked_file.relative_path.clone(),
+            snapshot_count: 1,
+            snapshots: vec![snapshot.clone()],
+        };
+        let segment_history = SegmentHistory {
+            segment: segment.clone(),
+            affected_files: vec![file_history.clone()],
+        };
+        let hour_history = HourHistory {
+            hour: hour_bucket.clone(),
+            segments: vec![segment_history.clone()],
+        };
         let view_entry = GeneratedMarkdownViewEntry {
             relative_markdown_path: PathBuf::from("2026-05-02/14/14-10__14-20.md"),
             title: "14:10-14:20".to_string(),
@@ -299,6 +332,9 @@ mod tests {
         assert_eq!(restore_operation.relative_path, PathBuf::from("src/lib.rs"));
         assert!(restore_operation.previous_file_existed);
         assert_eq!(restore_outcome.operation.id, "restore-1");
+        assert_eq!(file_history.snapshot_count, 1);
+        assert_eq!(segment_history.affected_files.len(), 1);
+        assert_eq!(hour_history.segments.len(), 1);
         assert_eq!(hour_bucket.to, "2026-05-02T15:00:00+02:00");
         assert_eq!(segment.label, "14-10__14-20");
         assert_eq!(

@@ -11,7 +11,7 @@ This repository is set up around the product direction captured in [agents/GOALS
 
 The documented architecture also leaves room for an MCP server surface for Zed Agent workflows, but that remains separate from the current MVP path.
 
-The repository now has a real storage-backed recovery path for manual CLI snapshots and safe restore flows, plus a first real sidecar watcher with polling-based `watch`, `ensure-daemon`, and `status` commands. Generated Markdown views and full Zed-side lifecycle wiring are still later-stage work.
+The repository now has a real storage-backed recovery path for manual CLI snapshots and safe restore flows, a polling-based sidecar watcher with `watch`, `ensure-daemon`, and `status`, and generated Markdown history views for hour/segment browsing. Full Zed-side lifecycle wiring is still later-stage work.
 
 ## What is here
 
@@ -49,6 +49,12 @@ cargo run -p local-history-cli -- recent .
 cargo run -p local-history-cli -- recent . --json
 cargo run -p local-history-cli -- list . --page 2 --page-size 20
 cargo run -p local-history-cli -- list . --file README.md --from 2026-05-02T14:00:00Z --to 2026-05-02T15:00:00Z --json
+cargo run -p local-history-cli -- history hour . --hour 2026-05-02T14
+cargo run -p local-history-cli -- history segment . --from 2026-05-02T14:10:00Z --to 2026-05-02T14:20:00Z --json
+cargo run -p local-history-cli -- view-root .
+cargo run -p local-history-cli -- render-markdown hour . --hour 2026-05-02T14
+cargo run -p local-history-cli -- render-markdown segment . --from 2026-05-02T14:10:00Z --to 2026-05-02T14:20:00Z
+cargo run -p local-history-cli -- rebuild-markdown-view .
 cargo run -p local-history-cli -- show <snapshot-id>
 cargo run -p local-history-cli -- restore <snapshot-id>
 cargo run -p local-history-cli -- restore --project-root . --recent 1
@@ -68,6 +74,10 @@ Current CLI behavior:
 - `recent`, `list`, `show`, `status`, and `safety-list` support `--json`.
 - `recent`, `list`, and `safety-list` support `--file`, `--from`, `--to`, and `--hour YYYY-MM-DDTHH`.
 - `browse` provides a minimal interactive recovery loop with next/previous navigation, snapshot preview, and restore confirmation.
+- `history hour` and `history segment` group raw snapshots into fixed 10-minute windows and list affected files with exact snapshot IDs preserved.
+- `render-markdown hour` generates a browsable hour directory with `README.md`, six fixed segment pages, and exact snapshot Markdown pages under `view/<date>/<hour>/`.
+- `render-markdown segment` validates a fixed 10-minute window and refreshes the parent hour view before returning the exact segment Markdown path.
+- `view-root` prints the Markdown view root; `rebuild-markdown-view` clears and rebuilds the full filesystem-browsable Markdown tree from raw snapshots.
 - `restore` always creates a safety snapshot first, records a restore operation, and then applies the target snapshot.
 - `undo-restore` replays the latest safety snapshot for the project.
 - `restore-last-safety` is an explicit escape hatch to restore the newest safety snapshot directly.

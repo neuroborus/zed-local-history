@@ -301,6 +301,7 @@ dependencies = [
  "rusqlite",
  "sha2",
  "thiserror",
+ "time",
  "zstd",
 ]
 

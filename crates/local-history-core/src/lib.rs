@@ -16,7 +16,8 @@ pub use ignore::{
 pub use layout::{default_data_dir, StorageLayout};
 pub use model::{
     segment_label, CompressionKind, ContentBlobRecord, ContentHash, GeneratedMarkdownViewEntry,
-    HourBucket, ProjectId, ProjectRecord, RestoreOperationRecord, RestoreOutcome, SnapshotId,
-    SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord,
+    HourBucket, HourHistory, ProjectId, ProjectRecord, RestoreOperationRecord, RestoreOutcome,
+    SegmentHistory, SnapshotId, SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord,
+    WindowedFileHistory,
 };
 pub use storage::{LocalHistoryStore, SnapshotPage, SnapshotQuery, SnapshotWriteRequest};

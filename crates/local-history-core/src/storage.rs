@@ -1,17 +1,21 @@
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
 
 use rusqlite::{named_params, params, Connection, OptionalExtension};
+use time::format_description::well_known::Rfc3339;
+use time::{Duration, OffsetDateTime, PrimitiveDateTime, UtcOffset};
 
 use crate::error::StorageError;
 use crate::hashing::sha256_hex;
 use crate::identity::{normalize_project_root, project_id_for_root};
 use crate::layout::{default_data_dir, StorageLayout};
 use crate::model::{
-    CompressionKind, ContentBlobRecord, ContentHash, ProjectId, ProjectRecord,
-    RestoreOperationRecord, RestoreOutcome, SnapshotId, SnapshotKind, SnapshotRecord,
-    TrackedFileRecord,
+    segment_label, CompressionKind, ContentBlobRecord, ContentHash, GeneratedMarkdownViewEntry,
+    HourBucket, HourHistory, ProjectId, ProjectRecord, RestoreOperationRecord, RestoreOutcome,
+    SegmentHistory, SnapshotId, SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord,
+    WindowedFileHistory,
 };
 
 const SCHEMA_SQL: &str = r#"
@@ -245,6 +249,44 @@ impl LocalHistoryStore {
         self.get_snapshot(snapshot_id)
     }
 
+    pub fn history_for_hour(&self, hour: &str) -> Result<HourHistory, StorageError> {
+        let hour_start = parse_iso_hour(hour)?;
+        let hour_end = hour_start + Duration::hours(1);
+        let mut segments = Vec::with_capacity(6);
+        let mut segment_start = hour_start;
+
+        for _ in 0..6 {
+            let segment_end = segment_start + Duration::minutes(10);
+            segments.push(self.history_for_segment_timestamps(segment_start, segment_end)?);
+            segment_start = segment_end;
+        }
+
+        Ok(HourHistory {
+            hour: HourBucket {
+                from: format_timestamp(hour_start)?,
+                to: format_timestamp(hour_end)?,
+            },
+            segments,
+        })
+    }
+
+    pub fn history_for_segment(
+        &self,
+        from_timestamp: &str,
+        to_timestamp: &str,
+    ) -> Result<SegmentHistory, StorageError> {
+        let from = parse_rfc3339(from_timestamp)?;
+        let to = parse_rfc3339(to_timestamp)?;
+
+        if from >= to {
+            return Err(StorageError::InvalidTimeWindow(format!(
+                "segment start must be earlier than end: {from_timestamp} .. {to_timestamp}"
+            )));
+        }
+
+        self.history_for_segment_timestamps(from, to)
+    }
+
     pub fn query_snapshots(&self, query: &SnapshotQuery) -> Result<SnapshotPage, StorageError> {
         let relative_path = query
             .relative_path
@@ -346,6 +388,71 @@ impl LocalHistoryStore {
                 ..SnapshotQuery::default()
             })?
             .items)
+    }
+
+    pub fn render_hour_markdown(
+        &self,
+        hour: &str,
+        generated_at: &str,
+    ) -> Result<GeneratedMarkdownViewEntry, StorageError> {
+        let hour_start = parse_iso_hour(hour)?;
+        let entries = self.render_hour_view(hour_start, generated_at)?;
+
+        self.write_root_markdown_index(generated_at)?;
+
+        entries
+            .into_iter()
+            .find(|entry| entry.relative_markdown_path == hour_markdown_relative_path(hour_start))
+            .ok_or_else(|| {
+                StorageError::InvalidRelativePath(format!(
+                    "missing generated hour README for {hour}"
+                ))
+            })
+    }
+
+    pub fn render_segment_markdown(
+        &self,
+        from_timestamp: &str,
+        to_timestamp: &str,
+        generated_at: &str,
+    ) -> Result<GeneratedMarkdownViewEntry, StorageError> {
+        let from = parse_rfc3339(from_timestamp)?.to_offset(UtcOffset::UTC);
+        let to = parse_rfc3339(to_timestamp)?.to_offset(UtcOffset::UTC);
+        validate_fixed_ten_minute_segment(from, to, from_timestamp, to_timestamp)?;
+
+        let hour_start = start_of_hour(from);
+        let target_path = segment_markdown_relative_path(from)?;
+        let entries = self.render_hour_view(hour_start, generated_at)?;
+
+        self.write_root_markdown_index(generated_at)?;
+
+        entries
+            .into_iter()
+            .find(|entry| entry.relative_markdown_path == target_path)
+            .ok_or_else(|| {
+                StorageError::InvalidRelativePath(format!(
+                    "missing generated segment Markdown for {from_timestamp} .. {to_timestamp}"
+                ))
+            })
+    }
+
+    pub fn rebuild_markdown_view(
+        &self,
+        generated_at: &str,
+    ) -> Result<Vec<GeneratedMarkdownViewEntry>, StorageError> {
+        clear_directory_if_exists(&self.layout.view_dir)?;
+        fs::create_dir_all(&self.layout.view_dir)?;
+        self.clear_generated_markdown_index()?;
+
+        let mut entries = Vec::new();
+
+        for (hour, _) in self.raw_snapshot_hour_counts()? {
+            let hour_start = parse_iso_hour(&hour)?;
+            entries.extend(self.render_hour_view(hour_start, generated_at)?);
+        }
+
+        entries.push(self.write_root_markdown_index(generated_at)?);
+        Ok(entries)
     }
 
     pub fn store_snapshot(
@@ -561,6 +668,479 @@ impl LocalHistoryStore {
             contents,
             existed: true,
         })
+    }
+
+    fn render_hour_view(
+        &self,
+        hour_start: OffsetDateTime,
+        generated_at: &str,
+    ) -> Result<Vec<GeneratedMarkdownViewEntry>, StorageError> {
+        let history = self.history_for_hour(&format_iso_hour(hour_start)?)?;
+        let hour_prefix = hour_directory_relative_path(hour_start);
+        let hour_dir = self.layout.view_dir.join(&hour_prefix);
+        let snapshots_dir = hour_dir.join("snapshots");
+
+        clear_directory_if_exists(&hour_dir)?;
+        fs::create_dir_all(&snapshots_dir)?;
+        self.clear_generated_markdown_entries_under(&hour_prefix)?;
+
+        let mut entries = Vec::new();
+        let mut snapshot_links = HashMap::<SnapshotId, PathBuf>::new();
+        let mut written_snapshot_ids = HashSet::<SnapshotId>::new();
+
+        for segment in &history.segments {
+            for file_history in &segment.affected_files {
+                for snapshot in &file_history.snapshots {
+                    if !written_snapshot_ids.insert(snapshot.id.clone()) {
+                        continue;
+                    }
+
+                    let snapshot_entry = self.write_snapshot_markdown(
+                        snapshot,
+                        generated_at,
+                        &snapshots_dir,
+                        &hour_prefix,
+                    )?;
+                    snapshot_links.insert(
+                        snapshot.id.clone(),
+                        snapshot_entry.relative_markdown_path.clone(),
+                    );
+                    entries.push(snapshot_entry);
+                }
+            }
+        }
+
+        for segment in &history.segments {
+            entries.push(self.write_segment_markdown(
+                segment,
+                generated_at,
+                &hour_dir,
+                &hour_prefix,
+                &snapshot_links,
+            )?);
+        }
+
+        entries.push(self.write_hour_markdown(&history, generated_at, &hour_dir, &hour_prefix)?);
+
+        Ok(entries)
+    }
+
+    fn history_for_segment_timestamps(
+        &self,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<SegmentHistory, StorageError> {
+        let from_timestamp = format_timestamp(from)?;
+        let to_timestamp = format_timestamp(to)?;
+        let snapshots = self.raw_snapshots_in_window(&from_timestamp, &to_timestamp)?;
+        let mut affected_files = BTreeMap::<PathBuf, Vec<SnapshotRecord>>::new();
+
+        for snapshot in snapshots {
+            affected_files
+                .entry(snapshot.relative_path.clone())
+                .or_default()
+                .push(snapshot);
+        }
+
+        let label = segment_label(from.hour(), from.minute()).ok_or_else(|| {
+            StorageError::InvalidTimeWindow(format!(
+                "failed to derive 10-minute segment label for {}",
+                from_timestamp
+            ))
+        })?;
+        let affected_files = affected_files
+            .into_iter()
+            .map(|(relative_path, snapshots)| WindowedFileHistory {
+                snapshot_count: snapshots.len(),
+                relative_path,
+                snapshots,
+            })
+            .collect();
+
+        Ok(SegmentHistory {
+            segment: TimeSegment {
+                label,
+                from: from_timestamp,
+                to: to_timestamp,
+            },
+            affected_files,
+        })
+    }
+
+    fn write_snapshot_markdown(
+        &self,
+        snapshot: &SnapshotRecord,
+        generated_at: &str,
+        snapshots_dir: &Path,
+        hour_prefix: &Path,
+    ) -> Result<GeneratedMarkdownViewEntry, StorageError> {
+        let timestamp = parse_rfc3339(&snapshot.timestamp)?.to_offset(UtcOffset::UTC);
+        let file_name =
+            snapshot_markdown_file_name(timestamp, &snapshot.relative_path, &snapshot.id);
+        let absolute_path = snapshots_dir.join(&file_name);
+        let relative_path = hour_prefix.join("snapshots").join(&file_name);
+        let contents = self.read_snapshot_content(&snapshot.id)?;
+        let preview = render_snapshot_markdown_preview(snapshot, &contents);
+        let title = format!(
+            "{} {}",
+            short_id(snapshot.id.as_str()),
+            snapshot.relative_path.display()
+        );
+        let body = format!(
+            "# Snapshot {}\n\n\
+             - Snapshot ID: `{}`\n\
+             - Project ID: `{}`\n\
+             - Project Root: `{}`\n\
+             - Relative Path: `{}`\n\
+             - Timestamp: `{}`\n\
+             - Kind: `{}`\n\
+             - Content Hash: `{}`\n\
+             - Size Bytes: `{}`\n\
+             - Captures Missing File: `{}`\n\
+             - Generated At: `{}`\n\n\
+             ## Restore\n\n\
+             ```bash\n\
+             cargo run -p local-history-cli -- restore {}\n\
+             ```\n\n\
+             ## Preview\n\n\
+             ```text\n\
+             {}\n\
+             ```\n",
+            short_id(snapshot.id.as_str()),
+            snapshot.id.as_str(),
+            snapshot.project_id.as_str(),
+            self.project.root.display(),
+            snapshot.relative_path.display(),
+            snapshot.timestamp,
+            snapshot.kind.as_str(),
+            snapshot.blob_hash.as_str(),
+            snapshot.size_bytes,
+            snapshot.captures_missing_file,
+            generated_at,
+            snapshot.id.as_str(),
+            preview
+        );
+
+        fs::write(absolute_path, body)?;
+        self.upsert_generated_markdown_entry(&relative_path, &title, generated_at)?;
+
+        Ok(GeneratedMarkdownViewEntry {
+            relative_markdown_path: relative_path,
+            title,
+            generated_at: generated_at.to_string(),
+        })
+    }
+
+    fn write_segment_markdown(
+        &self,
+        history: &SegmentHistory,
+        generated_at: &str,
+        hour_dir: &Path,
+        hour_prefix: &Path,
+        snapshot_links: &HashMap<SnapshotId, PathBuf>,
+    ) -> Result<GeneratedMarkdownViewEntry, StorageError> {
+        let file_name = format!("{}.md", history.segment.label);
+        let absolute_path = hour_dir.join(&file_name);
+        let relative_path = hour_prefix.join(&file_name);
+        let title = format!(
+            "Segment {}",
+            human_window_label(&history.segment.from, &history.segment.to)
+        );
+        let mut body = String::new();
+
+        body.push_str(&format!("# {}\n\n", title));
+        body.push_str(&format!(
+            "- Project ID: `{}`\n- Project Root: `{}`\n- Window: `{}` -> `{}`\n- Generated At: `{}`\n\n",
+            self.project.id.as_str(),
+            self.project.root.display(),
+            history.segment.from,
+            history.segment.to,
+            generated_at
+        ));
+
+        if history.affected_files.is_empty() {
+            body.push_str("No raw snapshots were captured in this segment.\n");
+        } else {
+            body.push_str("## Affected Files\n\n");
+
+            for file_history in &history.affected_files {
+                body.push_str(&format!(
+                    "### `{}`\n\n",
+                    file_history.relative_path.display()
+                ));
+                body.push_str(&format!("- Snapshots: `{}`\n", file_history.snapshot_count));
+
+                for snapshot in &file_history.snapshots {
+                    let link = snapshot_links.get(&snapshot.id).ok_or_else(|| {
+                        StorageError::SnapshotNotFound(snapshot.id.as_str().to_string())
+                    })?;
+                    let link_name =
+                        path_to_slash_string(relative_path_from_hour_dir(&relative_path, link)?);
+
+                    body.push_str(&format!(
+                        "- [{} — {}](./{})\n",
+                        human_timestamp(&snapshot.timestamp),
+                        short_id(snapshot.id.as_str()),
+                        link_name
+                    ));
+                }
+
+                body.push('\n');
+            }
+        }
+
+        body.push_str("## Restore Examples\n\n");
+
+        if history.affected_files.is_empty() {
+            body.push_str("No restore targets are available for this segment yet.\n");
+        } else {
+            let mut snapshot_ids = BTreeSet::new();
+
+            for file_history in &history.affected_files {
+                for snapshot in &file_history.snapshots {
+                    snapshot_ids.insert(snapshot.id.as_str().to_string());
+                }
+            }
+
+            for snapshot_id in snapshot_ids {
+                body.push_str("```bash\n");
+                body.push_str(&format!(
+                    "cargo run -p local-history-cli -- restore {snapshot_id}\n"
+                ));
+                body.push_str("```\n\n");
+            }
+        }
+
+        fs::write(absolute_path, body)?;
+        self.upsert_generated_markdown_entry(&relative_path, &title, generated_at)?;
+
+        Ok(GeneratedMarkdownViewEntry {
+            relative_markdown_path: relative_path,
+            title,
+            generated_at: generated_at.to_string(),
+        })
+    }
+
+    fn write_hour_markdown(
+        &self,
+        history: &HourHistory,
+        generated_at: &str,
+        hour_dir: &Path,
+        hour_prefix: &Path,
+    ) -> Result<GeneratedMarkdownViewEntry, StorageError> {
+        let absolute_path = hour_dir.join("README.md");
+        let relative_path = hour_prefix.join("README.md");
+        let title = format!(
+            "Hour {}",
+            human_window_label(&history.hour.from, &history.hour.to)
+        );
+        let mut body = String::new();
+
+        body.push_str(&format!("# {}\n\n", title));
+        body.push_str(&format!(
+            "- Project ID: `{}`\n- Project Root: `{}`\n- Window: `{}` -> `{}`\n- Generated At: `{}`\n\n",
+            self.project.id.as_str(),
+            self.project.root.display(),
+            history.hour.from,
+            history.hour.to,
+            generated_at
+        ));
+        body.push_str("## Segments\n\n");
+
+        for segment in &history.segments {
+            let snapshot_count: usize = segment
+                .affected_files
+                .iter()
+                .map(|file_history| file_history.snapshot_count)
+                .sum();
+            let file_count = segment.affected_files.len();
+
+            body.push_str(&format!(
+                "- [{}]({}.md) — {} snapshots across {} files\n",
+                human_window_label(&segment.segment.from, &segment.segment.to),
+                segment.segment.label,
+                snapshot_count,
+                file_count
+            ));
+        }
+
+        body.push_str("\n## Rebuild\n\n```bash\n");
+        body.push_str(&format!(
+            "cargo run -p local-history-cli -- rebuild-markdown-view {}\n",
+            self.project.root.display()
+        ));
+        body.push_str("```\n");
+
+        fs::write(absolute_path, body)?;
+        self.upsert_generated_markdown_entry(&relative_path, &title, generated_at)?;
+
+        Ok(GeneratedMarkdownViewEntry {
+            relative_markdown_path: relative_path,
+            title,
+            generated_at: generated_at.to_string(),
+        })
+    }
+
+    fn write_root_markdown_index(
+        &self,
+        generated_at: &str,
+    ) -> Result<GeneratedMarkdownViewEntry, StorageError> {
+        fs::create_dir_all(&self.layout.view_dir)?;
+
+        let absolute_path = self.layout.view_dir.join("README.md");
+        let relative_path = PathBuf::from("README.md");
+        let title = "Local History View".to_string();
+        let mut body = String::new();
+
+        body.push_str("# Local History View\n\n");
+        body.push_str(&format!(
+            "- Project ID: `{}`\n- Project Root: `{}`\n- Generated At: `{}`\n\n",
+            self.project.id.as_str(),
+            self.project.root.display(),
+            generated_at
+        ));
+        body.push_str("## Hours\n\n");
+
+        let hour_counts = self.raw_snapshot_hour_counts()?;
+
+        if hour_counts.is_empty() {
+            body.push_str("No raw snapshots have been captured yet.\n");
+        } else {
+            for (hour, count) in hour_counts {
+                let hour_start = parse_iso_hour(&hour)?;
+                let link = path_to_slash_string(hour_markdown_relative_path(hour_start));
+                body.push_str(&format!(
+                    "- [{}](./{}) — {} snapshots\n",
+                    human_hour_label(hour_start),
+                    link,
+                    count
+                ));
+            }
+        }
+
+        body.push_str("\n## Commands\n\n```bash\n");
+        body.push_str(&format!(
+            "cargo run -p local-history-cli -- view-root {}\n",
+            self.project.root.display()
+        ));
+        body.push_str(&format!(
+            "cargo run -p local-history-cli -- rebuild-markdown-view {}\n",
+            self.project.root.display()
+        ));
+        body.push_str("```\n");
+
+        fs::write(absolute_path, body)?;
+        self.upsert_generated_markdown_entry(&relative_path, &title, generated_at)?;
+
+        Ok(GeneratedMarkdownViewEntry {
+            relative_markdown_path: relative_path,
+            title,
+            generated_at: generated_at.to_string(),
+        })
+    }
+
+    fn upsert_generated_markdown_entry(
+        &self,
+        relative_path: &Path,
+        title: &str,
+        generated_at: &str,
+    ) -> Result<(), StorageError> {
+        self.connection.execute(
+            "INSERT INTO generated_markdown_views (
+                project_id,
+                relative_markdown_path,
+                title,
+                generated_at
+             ) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(project_id, relative_markdown_path)
+             DO UPDATE SET
+                title = excluded.title,
+                generated_at = excluded.generated_at",
+            params![
+                self.project.id.as_str(),
+                path_to_slash_string(relative_path),
+                title,
+                generated_at,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    fn clear_generated_markdown_index(&self) -> Result<(), StorageError> {
+        self.connection.execute(
+            "DELETE FROM generated_markdown_views WHERE project_id = ?1",
+            params![self.project.id.as_str()],
+        )?;
+
+        Ok(())
+    }
+
+    fn clear_generated_markdown_entries_under(&self, prefix: &Path) -> Result<(), StorageError> {
+        let prefix = path_to_slash_string(prefix);
+        let like_pattern = format!("{prefix}/%");
+
+        self.connection.execute(
+            "DELETE FROM generated_markdown_views
+             WHERE project_id = ?1
+               AND (relative_markdown_path = ?2 OR relative_markdown_path LIKE ?3)",
+            params![self.project.id.as_str(), prefix, like_pattern],
+        )?;
+
+        Ok(())
+    }
+
+    fn raw_snapshot_hour_counts(&self) -> Result<Vec<(String, usize)>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT timestamp
+             FROM snapshots
+             WHERE project_id = ?1 AND kind = ?2
+             ORDER BY unixepoch(timestamp) DESC, id DESC",
+        )?;
+        let rows = statement.query_map(
+            params![self.project.id.as_str(), SnapshotKind::Raw.as_str()],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut counts = BTreeMap::<String, usize>::new();
+
+        for timestamp in rows {
+            let timestamp = timestamp?;
+            let hour_key = format_iso_hour(parse_rfc3339(&timestamp)?.to_offset(UtcOffset::UTC))?;
+            *counts.entry(hour_key).or_default() += 1;
+        }
+
+        let mut items = counts.into_iter().collect::<Vec<_>>();
+        items.sort_by(|left, right| right.0.cmp(&left.0));
+        Ok(items)
+    }
+
+    fn raw_snapshots_in_window(
+        &self,
+        from_timestamp: &str,
+        to_timestamp: &str,
+    ) -> Result<Vec<SnapshotRecord>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, project_id, relative_path, blob_hash, size_bytes, timestamp, kind,
+                    captures_missing_file
+             FROM snapshots
+             WHERE project_id = :project_id
+               AND kind = :kind
+               AND unixepoch(timestamp) >= unixepoch(:from_timestamp)
+               AND unixepoch(timestamp) < unixepoch(:to_timestamp)
+             ORDER BY unixepoch(timestamp) DESC, id DESC",
+        )?;
+        let rows = statement.query_map(
+            named_params! {
+                ":project_id": self.project.id.as_str(),
+                ":kind": SnapshotKind::Raw.as_str(),
+                ":from_timestamp": from_timestamp,
+                ":to_timestamp": to_timestamp,
+            },
+            snapshot_row_mapper,
+        )?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
     }
 
     fn apply_snapshot(&self, snapshot: &SnapshotRecord) -> Result<PathBuf, StorageError> {
@@ -794,6 +1374,260 @@ fn restore_operation_id(
     digest[..24].to_string()
 }
 
+fn parse_rfc3339(timestamp: &str) -> Result<OffsetDateTime, StorageError> {
+    OffsetDateTime::parse(timestamp, &Rfc3339)
+        .map_err(|error| StorageError::InvalidTimestamp(format!("{timestamp}: {error}")))
+}
+
+fn parse_iso_hour(hour: &str) -> Result<OffsetDateTime, StorageError> {
+    PrimitiveDateTime::parse(
+        hour,
+        &time::macros::format_description!("[year]-[month]-[day]T[hour]"),
+    )
+    .map(|value| value.assume_utc())
+    .map_err(|error| StorageError::InvalidTimestamp(format!("{hour}: {error}")))
+}
+
+fn format_timestamp(timestamp: OffsetDateTime) -> Result<String, StorageError> {
+    timestamp
+        .format(&Rfc3339)
+        .map_err(|error| StorageError::InvalidTimestamp(error.to_string()))
+}
+
+fn validate_fixed_ten_minute_segment(
+    from: OffsetDateTime,
+    to: OffsetDateTime,
+    from_timestamp: &str,
+    to_timestamp: &str,
+) -> Result<(), StorageError> {
+    if to - from != Duration::minutes(10)
+        || from.minute() % 10 != 0
+        || from.second() != 0
+        || to.second() != 0
+    {
+        return Err(StorageError::InvalidTimeWindow(format!(
+            "expected a fixed 10-minute segment: {from_timestamp} .. {to_timestamp}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn start_of_hour(timestamp: OffsetDateTime) -> OffsetDateTime {
+    timestamp
+        .replace_minute(0)
+        .expect("valid minute replacement")
+        .replace_second(0)
+        .expect("valid second replacement")
+        .replace_millisecond(0)
+        .expect("valid millisecond replacement")
+        .replace_microsecond(0)
+        .expect("valid microsecond replacement")
+        .replace_nanosecond(0)
+        .expect("valid nanosecond replacement")
+}
+
+fn format_iso_hour(timestamp: OffsetDateTime) -> Result<String, StorageError> {
+    timestamp
+        .format(&time::macros::format_description!(
+            "[year]-[month]-[day]T[hour]"
+        ))
+        .map_err(|error| StorageError::InvalidTimestamp(error.to_string()))
+}
+
+fn format_date_directory(timestamp: OffsetDateTime) -> String {
+    timestamp
+        .format(&time::macros::format_description!("[year]-[month]-[day]"))
+        .expect("date directory format must be valid")
+}
+
+fn format_hour_directory(timestamp: OffsetDateTime) -> String {
+    timestamp
+        .format(&time::macros::format_description!("[hour]"))
+        .expect("hour directory format must be valid")
+}
+
+fn hour_directory_relative_path(hour_start: OffsetDateTime) -> PathBuf {
+    PathBuf::from(format_date_directory(hour_start)).join(format_hour_directory(hour_start))
+}
+
+fn hour_markdown_relative_path(hour_start: OffsetDateTime) -> PathBuf {
+    hour_directory_relative_path(hour_start).join("README.md")
+}
+
+fn segment_markdown_relative_path(from: OffsetDateTime) -> Result<PathBuf, StorageError> {
+    let from_timestamp = format_timestamp(from)?;
+    let label = segment_label(from.hour(), from.minute()).ok_or_else(|| {
+        StorageError::InvalidTimeWindow(format!(
+            "failed to derive 10-minute segment label for {}",
+            from_timestamp
+        ))
+    })?;
+
+    Ok(hour_directory_relative_path(start_of_hour(from)).join(format!("{label}.md")))
+}
+
+fn snapshot_markdown_file_name(
+    timestamp: OffsetDateTime,
+    relative_path: &Path,
+    snapshot_id: &SnapshotId,
+) -> String {
+    let time_prefix = timestamp
+        .format(&time::macros::format_description!(
+            "[hour]-[minute]-[second]"
+        ))
+        .expect("snapshot filename time format must be valid");
+    let sanitized_path = sanitize_relative_path_for_file_name(relative_path);
+
+    format!(
+        "{time_prefix}__{sanitized_path}__{}.md",
+        short_id(snapshot_id.as_str())
+    )
+}
+
+fn sanitize_relative_path_for_file_name(relative_path: &Path) -> String {
+    let joined = relative_path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("_");
+
+    let sanitized = joined
+        .chars()
+        .map(|character| match character {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' => character,
+            _ => '_',
+        })
+        .collect::<String>();
+
+    if sanitized.is_empty() {
+        "snapshot".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn render_snapshot_markdown_preview(snapshot: &SnapshotRecord, contents: &[u8]) -> String {
+    if snapshot.captures_missing_file {
+        return "[missing file state]".to_string();
+    }
+
+    if contents.is_empty() {
+        return "<empty file>".to_string();
+    }
+
+    match std::str::from_utf8(contents) {
+        Ok(text) => {
+            let mut lines = text.lines();
+            let mut preview = lines.by_ref().take(40).collect::<Vec<_>>().join("\n");
+
+            if lines.next().is_some() {
+                preview.push_str("\n... (truncated)");
+            }
+
+            if preview.is_empty() {
+                "<empty file>".to_string()
+            } else {
+                preview
+            }
+        }
+        Err(_) => "[binary content omitted]".to_string(),
+    }
+}
+
+fn human_timestamp(raw: &str) -> String {
+    OffsetDateTime::parse(raw, &Rfc3339)
+        .ok()
+        .and_then(|timestamp| {
+            timestamp
+                .to_offset(UtcOffset::UTC)
+                .format(&time::macros::format_description!(
+                    "[year]-[month]-[day] [hour]:[minute]:[second] UTC"
+                ))
+                .ok()
+        })
+        .unwrap_or_else(|| raw.to_string())
+}
+
+fn human_window_label(from: &str, to: &str) -> String {
+    format!("{} -> {}", human_timestamp(from), human_timestamp(to))
+}
+
+fn human_hour_label(hour_start: OffsetDateTime) -> String {
+    let start = hour_start.to_offset(UtcOffset::UTC);
+    let end = (hour_start + Duration::hours(1)).to_offset(UtcOffset::UTC);
+
+    format!(
+        "{} -> {}",
+        start
+            .format(&time::macros::format_description!(
+                "[year]-[month]-[day] [hour]:[minute] UTC"
+            ))
+            .expect("hour label start format must be valid"),
+        end.format(&time::macros::format_description!("[hour]:[minute] UTC"))
+            .expect("hour label end format must be valid")
+    )
+}
+
+fn clear_directory_if_exists(path: &Path) -> Result<(), StorageError> {
+    if path.exists() {
+        fs::remove_dir_all(path)?;
+    }
+
+    Ok(())
+}
+
+fn relative_path_from_hour_dir(from_path: &Path, to_path: &Path) -> Result<PathBuf, StorageError> {
+    let base = from_path
+        .parent()
+        .ok_or_else(|| StorageError::InvalidRelativePath(from_path.display().to_string()))?;
+
+    let to_components = normalize_relative_path(to_path)?
+        .components()
+        .map(component_to_string)
+        .collect::<Vec<_>>();
+    let base_components = normalize_relative_path(base)?
+        .components()
+        .map(component_to_string)
+        .collect::<Vec<_>>();
+
+    let shared_len = base_components
+        .iter()
+        .zip(to_components.iter())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut relative = PathBuf::new();
+
+    for _ in shared_len..base_components.len() {
+        relative.push("..");
+    }
+
+    for component in to_components.into_iter().skip(shared_len) {
+        relative.push(component);
+    }
+
+    Ok(relative)
+}
+
+fn path_to_slash_string(path: impl AsRef<Path>) -> String {
+    path.as_ref()
+        .components()
+        .map(component_to_string)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn component_to_string(component: Component<'_>) -> String {
+    component.as_os_str().to_string_lossy().into_owned()
+}
+
+fn short_id(value: &str) -> &str {
+    &value[..std::cmp::min(value.len(), 8)]
+}
+
 fn ensure_schema_compatibility(connection: &Connection) -> Result<(), StorageError> {
     if !table_has_column(connection, "snapshots", "captures_missing_file")? {
         connection.execute(
@@ -866,7 +1700,7 @@ fn restore_operation_row_mapper(
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalHistoryStore, SnapshotQuery, SnapshotWriteRequest, SCHEMA_SQL};
+    use super::{LocalHistoryStore, SnapshotQuery, SnapshotWriteRequest, StorageError, SCHEMA_SQL};
     use crate::{SnapshotId, SnapshotKind};
     use rusqlite::params;
     use std::fs;
@@ -1323,6 +2157,244 @@ mod tests {
 
         assert_eq!(page.total_items, 1);
         assert_eq!(page.items[0].id, matching_snapshot.id);
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn history_for_segment_groups_snapshots_by_file() {
+        let (base_dir, project_root) = create_test_roots("segment-history");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/alpha.rs"),
+                contents: b"alpha-older".to_vec(),
+                timestamp: "2026-05-02T14:12:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("first alpha snapshot must store");
+        let latest_alpha = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/alpha.rs"),
+                contents: b"alpha-newer".to_vec(),
+                timestamp: "2026-05-02T14:15:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("second alpha snapshot must store");
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/beta.rs"),
+                contents: b"beta".to_vec(),
+                timestamp: "2026-05-02T14:18:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("beta snapshot must store");
+
+        let history = store
+            .history_for_segment("2026-05-02T14:10:00Z", "2026-05-02T14:20:00Z")
+            .expect("segment history must build");
+
+        assert_eq!(history.segment.label, "14-10__14-20");
+        assert_eq!(history.affected_files.len(), 2);
+        assert_eq!(
+            history.affected_files[0].relative_path,
+            PathBuf::from("src/alpha.rs")
+        );
+        assert_eq!(history.affected_files[0].snapshot_count, 2);
+        assert_eq!(history.affected_files[0].snapshots[0].id, latest_alpha.id);
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn history_for_hour_creates_six_fixed_segments() {
+        let (base_dir, project_root) = create_test_roots("hour-history");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+
+        let first_segment = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/first.rs"),
+                contents: b"first".to_vec(),
+                timestamp: "2026-05-02T14:05:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("first segment snapshot must store");
+        let fourth_segment = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/fourth.rs"),
+                contents: b"fourth".to_vec(),
+                timestamp: "2026-05-02T14:33:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("fourth segment snapshot must store");
+
+        let history = store
+            .history_for_hour("2026-05-02T14")
+            .expect("hour history must build");
+
+        assert_eq!(history.hour.from, "2026-05-02T14:00:00Z");
+        assert_eq!(history.hour.to, "2026-05-02T15:00:00Z");
+        assert_eq!(history.segments.len(), 6);
+        assert_eq!(history.segments[0].segment.label, "14-00__14-10");
+        assert_eq!(history.segments[3].segment.label, "14-30__14-40");
+        assert_eq!(
+            history.segments[0].affected_files[0].snapshots[0].id,
+            first_segment.id
+        );
+        assert_eq!(
+            history.segments[3].affected_files[0].snapshots[0].id,
+            fourth_segment.id
+        );
+        assert!(history.segments[1].affected_files.is_empty());
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn render_hour_markdown_writes_filesystem_browsable_view() {
+        let (base_dir, project_root) = create_test_roots("render-hour");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+        let snapshot = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/alpha.rs"),
+                contents: b"fn alpha() {\n    println!(\"alpha\");\n}\n".to_vec(),
+                timestamp: "2026-05-02T14:15:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("snapshot must store");
+
+        let hour_entry = store
+            .render_hour_markdown("2026-05-02T14", "2026-05-02T14:59:00Z")
+            .expect("hour markdown render must succeed");
+        let hour_readme_path = store
+            .layout()
+            .view_dir
+            .join(&hour_entry.relative_markdown_path);
+        let hour_readme =
+            fs::read_to_string(hour_readme_path).expect("hour README must be readable");
+        let root_index =
+            fs::read_to_string(store.layout().view_dir.join("README.md")).expect("root index");
+        let segment_markdown = fs::read_to_string(
+            store
+                .layout()
+                .view_dir
+                .join("2026-05-02")
+                .join("14")
+                .join("14-10__14-20.md"),
+        )
+        .expect("segment markdown must exist");
+        let snapshot_dir = store
+            .layout()
+            .view_dir
+            .join("2026-05-02")
+            .join("14")
+            .join("snapshots");
+        let snapshot_pages = fs::read_dir(snapshot_dir)
+            .expect("snapshot dir must exist")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("snapshot dir entries must read");
+        let snapshot_page = fs::read_to_string(snapshot_pages[0].path())
+            .expect("snapshot markdown page must be readable");
+        let generated_entries: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM generated_markdown_views WHERE project_id = ?1",
+                params![store.project().id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("generated markdown entry count must work");
+
+        assert_eq!(
+            hour_entry.relative_markdown_path,
+            PathBuf::from("2026-05-02/14/README.md")
+        );
+        assert!(hour_readme.contains("## Segments"));
+        assert!(root_index.contains("./2026-05-02/14/README.md"));
+        assert!(segment_markdown.contains(&format!(
+            "cargo run -p local-history-cli -- restore {}",
+            snapshot.id.as_str()
+        )));
+        assert!(snapshot_page.contains(snapshot.id.as_str()));
+        assert!(snapshot_page.contains("println!(\"alpha\");"));
+        assert!(generated_entries >= 8);
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn rebuild_markdown_view_restores_deleted_view_tree() {
+        let (base_dir, project_root) = create_test_roots("rebuild-view");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/alpha.rs"),
+                contents: b"alpha".to_vec(),
+                timestamp: "2026-05-02T14:05:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("first snapshot must store");
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/beta.rs"),
+                contents: b"beta".to_vec(),
+                timestamp: "2026-05-02T15:05:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("second snapshot must store");
+
+        let first_entries = store
+            .rebuild_markdown_view("2026-05-02T15:10:00Z")
+            .expect("first rebuild must succeed");
+        assert!(store.layout().view_dir.join("README.md").exists());
+
+        fs::remove_dir_all(&store.layout().view_dir).expect("view dir removal must succeed");
+
+        let second_entries = store
+            .rebuild_markdown_view("2026-05-02T15:11:00Z")
+            .expect("second rebuild must succeed");
+        let root_index =
+            fs::read_to_string(store.layout().view_dir.join("README.md")).expect("root index");
+
+        assert!(!first_entries.is_empty());
+        assert!(!second_entries.is_empty());
+        assert!(root_index.contains("./2026-05-02/15/README.md"));
+        assert!(root_index.contains("./2026-05-02/14/README.md"));
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn render_segment_markdown_requires_fixed_ten_minute_window() {
+        let (base_dir, project_root) = create_test_roots("render-segment-window");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+
+        let error = store
+            .render_segment_markdown(
+                "2026-05-02T14:12:00Z",
+                "2026-05-02T14:22:00Z",
+                "2026-05-02T14:22:30Z",
+            )
+            .expect_err("misaligned segment render must fail");
+
+        assert!(matches!(error, StorageError::InvalidTimeWindow(_)));
 
         cleanup_test_roots(&base_dir);
     }
