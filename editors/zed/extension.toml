@@ -1,0 +1,22 @@
+id = "local-history"
+name = "Local History"
+version = "0.1.0"
+description = "Thin Zed integration for the local-history sidecar"
+authors = ["neuroborus"]
+repository = "https://github.com/neuroborus/zed-local-history"
+schema_version = 1
+
+[slash_commands.local-history-status]
+description = "Show local-history bootstrap status"
+requires_argument = false
+tooltip_text = "Show local-history status"
+
+[slash_commands.local-history-recent]
+description = "Describe the recent snapshots flow"
+requires_argument = false
+tooltip_text = "Show recent snapshot flow"
+
+[slash_commands.local-history-view]
+description = "Describe how the Markdown view will be exposed"
+requires_argument = false
+tooltip_text = "Explain snapshot view flow"

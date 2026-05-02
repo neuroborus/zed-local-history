@@ -1,0 +1,11 @@
+[package]
+name = "local-history-sidecar"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Native sidecar entrypoint for zed-local-history."
+
+[dependencies]
+local-history-core = { path = "../local-history-core" }

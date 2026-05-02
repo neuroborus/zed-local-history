@@ -1,0 +1,11 @@
+[package]
+name = "local-history-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Core domain and storage helpers for zed-local-history."
+
+[lib]
+path = "src/lib.rs"

@@ -1,0 +1,15 @@
+[package]
+name = "local-history-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "User-facing CLI for zed-local-history."
+
+[[bin]]
+name = "local-history"
+path = "src/main.rs"
+
+[dependencies]
+local-history-core = { path = "../local-history-core" }
