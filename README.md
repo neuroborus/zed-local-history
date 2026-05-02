@@ -11,7 +11,7 @@ This repository is set up around the product direction captured in [agents/GOALS
 
 The documented architecture also leaves room for an MCP server surface for Zed Agent workflows, but that remains separate from the current MVP path.
 
-The repository now has a real storage-backed recovery path for manual CLI snapshots and safe restore flows. File watching, generated Markdown views, and full Zed-side sidecar lifecycle are still later-stage work.
+The repository now has a real storage-backed recovery path for manual CLI snapshots and safe restore flows, plus a first real sidecar watcher with polling-based `watch`, `ensure-daemon`, and `status` commands. Generated Markdown views and full Zed-side lifecycle wiring are still later-stage work.
 
 ## What is here
 
@@ -57,6 +57,8 @@ cargo run -p local-history-cli -- browse .
 cargo run -p local-history-cli -- undo-restore .
 cargo run -p local-history-cli -- restore-last-safety .
 cargo run -p local-history-sidecar -- health
+cargo run -p local-history-sidecar -- status .
+cargo run -p local-history-sidecar -- ensure-daemon .
 ```
 
 Current CLI behavior:
@@ -70,6 +72,14 @@ Current CLI behavior:
 - `undo-restore` replays the latest safety snapshot for the project.
 - `restore-last-safety` is an explicit escape hatch to restore the newest safety snapshot directly.
 - `safety-list` shows the stored safety snapshots separately from normal history.
+
+Current sidecar behavior:
+
+- `watch <project-root>` performs an initial scan, applies default ignore rules, and then polls for saved file changes.
+- when a tracked file changes, the sidecar stores the previous known state as a raw snapshot;
+- when a tracked file is deleted, the sidecar stores the previous known state before dropping it from the cache;
+- `ensure-daemon <project-root>` starts a background watcher if there is no fresh heartbeat;
+- `status <project-root>` reports watcher state from the sidecar heartbeat file.
 
 ## Zed Extension Notes
 

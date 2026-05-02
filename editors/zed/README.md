@@ -29,6 +29,8 @@ Zed's documented MCP server support also creates a second possible integration r
 - expose the most useful recovery flows through Zed-supported extension surfaces.
 - optionally register a local-history MCP server when that adapter exists.
 
+The native sidecar now already exposes real JSON `health`, `status`, `watch`, and `ensure-daemon` behavior, so the remaining extension work is mainly about invoking those commands from Zed and presenting their results cleanly.
+
 ## Current commands
 
 - `/local-history-status`
