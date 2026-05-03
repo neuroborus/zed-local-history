@@ -97,6 +97,45 @@ Current sidecar behavior:
 - `ensure-daemon <project-root>` starts a background watcher if there is no fresh heartbeat;
 - `status <project-root>` reports watcher state from the sidecar heartbeat file.
 
+## Privacy, Storage, and Limits
+
+Local history is stored outside the user repository:
+
+- macOS: `~/Library/Application Support/local-history`
+- Linux: `$XDG_DATA_HOME/local-history` or `~/.local/share/local-history`
+- Windows: `%LOCALAPPDATA%\\local-history`
+
+Per project, the storage layout is:
+
+- `projects/<project-id>/metadata.sqlite` for snapshot metadata and restore operations;
+- `projects/<project-id>/blobs/` for compressed snapshot contents;
+- `projects/<project-id>/view/` for generated Markdown history;
+- `projects/<project-id>/logs/` for watcher logs and heartbeat status.
+
+Current data-handling rules and limits:
+
+- any saved file that is not ignored can be snapshotted, including credentials embedded in normal source files;
+- built-in ignores currently skip `.git/`, `node_modules/`, `target/`, `dist/`, `build/`, `.next/`, `.cache/`, `coverage/`, `.env*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.sqlite`, `*.db`, and `*.log`;
+- the current max snapshot file size is `4 MiB`;
+- retention defaults keep at most `250` snapshots per file, cap referenced project storage at `512 MiB`, and prune snapshots older than `30` days;
+- the `IgnorePolicy` reserves `.local-history-ignore`, but custom project-local ignore parsing is not wired yet, so ignore behavior is built-in only today.
+
+Deletion and cleanup:
+
+- remove one project's history by deleting its `projects/<project-id>/` directory;
+- remove all history by deleting the whole `local-history` base directory;
+- run `cargo run -p local-history-cli -- prune <project-root>` to apply retention without deleting the entire project history.
+
+## Troubleshooting
+
+- Sidecar not starting: run `cargo run -p local-history-sidecar -- status <project-root>` and inspect `projects/<project-id>/logs/watcher.log` plus `watcher-status.json`.
+- Extension capabilities disabled or bootstrap failing: use the CLI directly first. The current Zed integration is additive and recovery does not depend on slash commands.
+- Unsupported platform: the extension bootstrap currently targets macOS `x86_64` / `aarch64`, Linux `x86_64` / `aarch64`, and Windows `x86_64` / `aarch64`. Other platforms need a manual sidecar path or direct CLI usage.
+- Watcher not detecting changes: only saved on-disk changes are captured, built-in ignored paths are skipped, and the current watcher is polling-based rather than event-driven.
+- Storage too large: run `cargo run -p local-history-cli -- status <project-root>` to inspect retention settings, then run `cargo run -p local-history-cli -- prune <project-root>`.
+- Markdown not updating: rerun `cargo run -p local-history-cli -- rebuild-markdown-view <project-root>`. Markdown generation writes under external storage and does not snapshot itself recursively.
+- Restore failure: confirm the snapshot still exists with `show <snapshot-id>` or `recent <project-root>`. A previously generated Markdown link can outlive the snapshot it points to after pruning.
+
 ## Zed Extension Notes
 
 The `editors/zed` package follows the current documented Zed extension shape:

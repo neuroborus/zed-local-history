@@ -601,6 +601,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
     use time::format_description::well_known::Rfc3339;
+    use time::macros::format_description;
     use time::OffsetDateTime;
 
     #[test]
@@ -740,6 +741,88 @@ mod tests {
 
         assert_eq!(from, "2026-05-02T14:10:00Z");
         assert_eq!(to, "2026-05-02T14:20:00Z");
+    }
+
+    #[test]
+    fn end_to_end_workflow_captures_restore_and_rebuilds_markdown() {
+        let root = create_test_root("workflow");
+        let base_dir = root.join("data");
+        let project_root = root.join("project");
+        let source_dir = project_root.join("src");
+        let live_path = source_dir.join("workflow.txt");
+
+        fs::create_dir_all(&base_dir).expect("base dir must exist");
+        fs::create_dir_all(&source_dir).expect("source dir must exist");
+        fs::write(&live_path, b"version one\n").expect("initial file must exist");
+
+        let store = LocalHistoryStore::open(&base_dir, &project_root).expect("store must open");
+        let previous = scan_project(&project_root).expect("initial scan must succeed");
+
+        fs::write(&live_path, b"version two\n").expect("updated file must exist");
+        let current = scan_project(&project_root).expect("updated scan must succeed");
+        reconcile_project_state(&store, &previous, &current).expect("reconcile must succeed");
+
+        let recent = store
+            .recent_raw_snapshots(10)
+            .expect("recent snapshot query must succeed");
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].relative_path, PathBuf::from("src/workflow.txt"));
+        assert_eq!(
+            store
+                .read_snapshot_content(&recent[0].id)
+                .expect("captured snapshot contents must be readable"),
+            b"version one\n"
+        );
+
+        let restore_outcome = store
+            .restore_snapshot(&recent[0].id, "2026-05-03T10:01:00Z")
+            .expect("restore must succeed");
+        assert_eq!(
+            fs::read_to_string(&live_path).expect("restore must rewrite live file"),
+            "version one\n"
+        );
+        assert_eq!(
+            store
+                .read_snapshot_content(&restore_outcome.safety_snapshot.id)
+                .expect("restore safety snapshot must be readable"),
+            b"version two\n"
+        );
+
+        let undo_outcome = store
+            .undo_last_restore("2026-05-03T10:02:00Z")
+            .expect("undo restore must succeed");
+        assert_eq!(undo_outcome.restored_snapshot.kind, SnapshotKind::Safety);
+        assert_eq!(
+            fs::read_to_string(&live_path).expect("undo must restore latest live contents"),
+            "version two\n"
+        );
+
+        let snapshot_hour = OffsetDateTime::parse(&recent[0].timestamp, &Rfc3339)
+            .expect("recent snapshot timestamp must parse")
+            .format(&format_description!("[year]-[month]-[day]T[hour]"))
+            .expect("snapshot hour must format");
+        let hour_entry = store
+            .render_hour_markdown(&snapshot_hour, "2026-05-03T10:03:00Z")
+            .expect("hour markdown render must succeed");
+        let rebuilt = store
+            .rebuild_markdown_view("2026-05-03T10:04:00Z")
+            .expect("markdown rebuild must succeed");
+        let hour_markdown_path = store
+            .layout()
+            .view_dir
+            .join(&hour_entry.relative_markdown_path);
+        let root_index = fs::read_to_string(store.layout().view_dir.join("README.md"))
+            .expect("root markdown index must exist");
+        let relative_hour_path = hour_entry
+            .relative_markdown_path
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        assert!(hour_markdown_path.exists());
+        assert!(!rebuilt.is_empty());
+        assert!(root_index.contains(&format!("./{relative_hour_path}")));
+
+        cleanup_test_project(&root);
     }
 
     fn state_with_file(relative_path: &str, contents: &[u8]) -> ProjectState {

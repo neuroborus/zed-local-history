@@ -2386,6 +2386,83 @@ mod tests {
     }
 
     #[test]
+    fn repeated_restore_chain_remains_recoverable() {
+        let (base_dir, project_root) = create_test_roots("restore-chain");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+        let first_target = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/chain.txt"),
+                contents: b"first target".to_vec(),
+                timestamp: "2026-05-02T14:20:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("first target snapshot must store");
+        let second_target = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/chain.txt"),
+                contents: b"second target".to_vec(),
+                timestamp: "2026-05-02T14:20:30Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("second target snapshot must store");
+        let live_path = store.project().root.join("src/chain.txt");
+
+        fs::create_dir_all(live_path.parent().expect("restore-chain parent must exist"))
+            .expect("parent dir must exist");
+        fs::write(&live_path, b"before first restore").expect("live file must exist");
+
+        store
+            .restore_snapshot(&first_target.id, "2026-05-02T14:21:00Z")
+            .expect("first restore must succeed");
+        assert_eq!(
+            fs::read_to_string(&live_path).expect("file must reflect first restore"),
+            "first target"
+        );
+
+        let second_restore = store
+            .restore_snapshot(&second_target.id, "2026-05-02T14:22:00Z")
+            .expect("second restore must succeed");
+        assert_eq!(
+            fs::read_to_string(&live_path).expect("file must reflect second restore"),
+            "second target"
+        );
+        assert_eq!(
+            store
+                .read_snapshot_content(&second_restore.safety_snapshot.id)
+                .expect("second restore safety snapshot must be readable"),
+            b"first target"
+        );
+
+        let undo_outcome = store
+            .undo_last_restore("2026-05-02T14:23:00Z")
+            .expect("undo after second restore must succeed");
+        assert_eq!(undo_outcome.restored_snapshot.kind, SnapshotKind::Safety);
+        assert_eq!(
+            undo_outcome.restored_snapshot.id,
+            second_restore.safety_snapshot.id
+        );
+        assert_eq!(
+            fs::read_to_string(&live_path).expect("file must return to first restore state"),
+            "first target"
+        );
+
+        let redo_outcome = store
+            .restore_last_safety_snapshot("2026-05-02T14:24:00Z")
+            .expect("redo through latest safety snapshot must succeed");
+        assert_eq!(redo_outcome.restored_snapshot.kind, SnapshotKind::Safety);
+        assert_eq!(
+            fs::read_to_string(&live_path).expect("file must return to second restore state"),
+            "second target"
+        );
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
     fn restore_last_safety_snapshot_handles_missing_file_state() {
         let (base_dir, project_root) = create_test_roots("missing-safety");
         let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
