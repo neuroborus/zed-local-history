@@ -4,6 +4,7 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-03
 
+- Stage 11 release matrix coverage is wider now. The GitHub release workflow now includes native `aarch64-unknown-linux-gnu` and `aarch64-pc-windows-msvc` jobs using GitHub-hosted ARM64 runner labels, and the Zed extension bootstrap now has explicit asset mappings for Linux ARM64 and Windows ARM64 sidecar archives. The docs also now state explicitly that `x86_64-unknown-linux-musl` is still outside the extension bootstrap contract because the current platform mapping cannot distinguish Linux libc families.
 - Stage 11 release hardening has started. The native sidecar now exposes a JSON `version` command, the Zed extension probes sidecar version compatibility before using a `PATH` or cached binary and falls back to the matching release asset when needed, and tagged GitHub releases now publish `SHA256SUMS.txt` alongside the platform archives and fixed-name sidecar bootstrap assets.
 
 ## 2026-05-02

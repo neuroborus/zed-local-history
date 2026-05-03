@@ -28,6 +28,12 @@ jobs:
             binary_suffix: ""
             sidecar_asset_stem: local-history-sidecar-x86_64-ubuntu-24.04
             sidecar_archive_name: local-history-sidecar-x86_64-ubuntu-24.04.tar.gz
+          - os: ubuntu-24.04-arm
+            artifact_name: local-history-aarch64-unknown-linux-gnu
+            release_archive_name: local-history-aarch64-unknown-linux-gnu.tar.gz
+            binary_suffix: ""
+            sidecar_asset_stem: local-history-sidecar-aarch64-unknown-linux-gnu
+            sidecar_archive_name: local-history-sidecar-aarch64-unknown-linux-gnu.tar.gz
           - os: macos-13
             artifact_name: local-history-x86_64-apple-darwin
             release_archive_name: local-history-x86_64-apple-darwin.tar.gz
@@ -46,6 +52,12 @@ jobs:
             binary_suffix: ".exe"
             sidecar_asset_stem: local-history-sidecar-x86_64-pc-windows-msvc
             sidecar_archive_name: local-history-sidecar-x86_64-pc-windows-msvc.zip
+          - os: windows-11-arm
+            artifact_name: local-history-aarch64-pc-windows-msvc
+            release_archive_name: local-history-aarch64-pc-windows-msvc.zip
+            binary_suffix: ".exe"
+            sidecar_asset_stem: local-history-sidecar-aarch64-pc-windows-msvc
+            sidecar_archive_name: local-history-sidecar-aarch64-pc-windows-msvc.zip
 
     steps:
       - name: Checkout

@@ -105,7 +105,7 @@ Zed also supports MCP servers for the Agent Panel, either through direct user `c
 
 The current extension no longer returns placeholder text. It resolves `local-history-sidecar` from `PATH` for dev installs, otherwise downloads and caches a matching GitHub release asset in the extension work directory, then calls real sidecar commands for status / watcher startup / hour rendering / segment rendering / restore. Before using a discovered binary, the extension probes `local-history-sidecar version` and requires a compatible sidecar version; an outdated `PATH` binary is ignored in favor of the bundled release path. Because the current extension API does not expose a direct "open arbitrary external file" action, the MVP path is to print or reveal the generated Markdown path in a usable way rather than pretending it can always be opened automatically.
 
-Tagged GitHub releases now also publish `SHA256SUMS.txt` alongside platform archives and fixed-name sidecar assets.
+Tagged GitHub releases now also publish `SHA256SUMS.txt` alongside platform archives and fixed-name sidecar assets. The current extension bootstrap contract now covers macOS `x86_64` / `aarch64`, Linux `x86_64` / `aarch64`, and Windows `x86_64` / `aarch64`.
 
 Current Zed-facing commands now cover:
 

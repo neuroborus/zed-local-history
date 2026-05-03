@@ -52,11 +52,13 @@ Current behavior:
 - `restore` calls `local-history-sidecar restore <snapshot-id>`
 - the extension probes `local-history-sidecar version` before use; if a `PATH` binary is missing or too old, it falls back to the cached/downloaded release asset for the current extension version
 - tagged releases publish `SHA256SUMS.txt` alongside the archives that the extension bootstrap relies on
+- release bootstrap currently has explicit asset mappings for macOS `x86_64` / `aarch64`, Linux `x86_64` / `aarch64`, and Windows `x86_64` / `aarch64`
 
 Current limitations:
 
 - the extension API does not provide a direct "open arbitrary external file path" action, so the MVP path is to expose the generated Markdown path instead of pretending it can always auto-open it
 - sidecar bootstrap currently depends on GitHub release assets with stable names; the workflow now produces those assets plus release checksums, but the full packaging/release story still belongs to later-stage release hardening
+- `x86_64-unknown-linux-musl` is still not part of the extension bootstrap contract because the current platform mapping distinguishes OS and CPU architecture, not Linux libc family
 
 If MCP integration is added, these commands may coexist with Agent Panel tools rather than being replaced by them.
 

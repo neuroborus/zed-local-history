@@ -434,12 +434,26 @@ fn release_target(os: Os, architecture: Architecture) -> Result<ReleaseTarget, S
             binary_name: "local-history-sidecar",
             file_type: DownloadedFileType::GzipTar,
         }),
+        (Os::Linux, Architecture::Aarch64) => Ok(ReleaseTarget {
+            platform_label: "Linux aarch64",
+            asset_stem: "local-history-sidecar-aarch64-unknown-linux-gnu",
+            archive_name: "local-history-sidecar-aarch64-unknown-linux-gnu.tar.gz",
+            binary_name: "local-history-sidecar",
+            file_type: DownloadedFileType::GzipTar,
+        }),
         (Os::Linux, Architecture::X8664) => Ok(ReleaseTarget {
             platform_label: "Linux x86_64",
             asset_stem: "local-history-sidecar-x86_64-unknown-linux-gnu",
             archive_name: "local-history-sidecar-x86_64-unknown-linux-gnu.tar.gz",
             binary_name: "local-history-sidecar",
             file_type: DownloadedFileType::GzipTar,
+        }),
+        (Os::Windows, Architecture::Aarch64) => Ok(ReleaseTarget {
+            platform_label: "Windows aarch64",
+            asset_stem: "local-history-sidecar-aarch64-pc-windows-msvc",
+            archive_name: "local-history-sidecar-aarch64-pc-windows-msvc.zip",
+            binary_name: "local-history-sidecar.exe",
+            file_type: DownloadedFileType::Zip,
         }),
         (Os::Windows, Architecture::X8664) => Ok(ReleaseTarget {
             platform_label: "Windows x86_64",
@@ -568,6 +582,35 @@ mod tests {
                 archive_name: "local-history-sidecar-x86_64-unknown-linux-gnu.tar.gz",
                 binary_name: "local-history-sidecar",
                 file_type: DownloadedFileType::GzipTar,
+            }
+        );
+    }
+
+    #[test]
+    fn maps_linux_arm_release_target() {
+        assert_eq!(
+            release_target(Os::Linux, Architecture::Aarch64).expect("linux arm target must exist"),
+            ReleaseTarget {
+                platform_label: "Linux aarch64",
+                asset_stem: "local-history-sidecar-aarch64-unknown-linux-gnu",
+                archive_name: "local-history-sidecar-aarch64-unknown-linux-gnu.tar.gz",
+                binary_name: "local-history-sidecar",
+                file_type: DownloadedFileType::GzipTar,
+            }
+        );
+    }
+
+    #[test]
+    fn maps_windows_arm_release_target() {
+        assert_eq!(
+            release_target(Os::Windows, Architecture::Aarch64)
+                .expect("windows arm target must exist"),
+            ReleaseTarget {
+                platform_label: "Windows aarch64",
+                asset_stem: "local-history-sidecar-aarch64-pc-windows-msvc",
+                archive_name: "local-history-sidecar-aarch64-pc-windows-msvc.zip",
+                binary_name: "local-history-sidecar.exe",
+                file_type: DownloadedFileType::Zip,
             }
         );
     }
