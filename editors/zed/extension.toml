@@ -26,6 +26,11 @@ description = "Generate and show the current hour Markdown history path"
 requires_argument = false
 tooltip_text = "Show current hour history"
 
+[slash_commands.local-history-current-segment]
+description = "Generate and show the current 10-minute segment Markdown history path"
+requires_argument = false
+tooltip_text = "Show current segment history"
+
 [slash_commands.local-history-previous-hour]
 description = "Generate and show the previous hour Markdown history path"
 requires_argument = false
@@ -35,6 +40,11 @@ tooltip_text = "Show previous hour history"
 description = "Generate and show a specific hour Markdown history path"
 requires_argument = true
 tooltip_text = "Show hour history"
+
+[slash_commands.local-history-segment]
+description = "Generate and show the 10-minute segment containing a specific ISO timestamp"
+requires_argument = true
+tooltip_text = "Show segment history"
 
 [slash_commands.local-history-restore]
 description = "Restore a snapshot by exact snapshot ID"

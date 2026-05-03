@@ -23,12 +23,19 @@ enum SidecarCommand {
     RenderCurrentHour {
         project_root: PathBuf,
     },
+    RenderCurrentSegment {
+        project_root: PathBuf,
+    },
     RenderPreviousHour {
         project_root: PathBuf,
     },
     RenderHour {
         project_root: PathBuf,
         hour: String,
+    },
+    RenderSegmentAt {
+        project_root: PathBuf,
+        at: String,
     },
     RenderSegment {
         project_root: PathBuf,
@@ -90,6 +97,13 @@ fn parse_command(args: &[String]) -> Result<SidecarCommand, String> {
             })
         }
         [_, command, scope, project_root]
+            if command == "render-markdown" && scope == "current-segment" =>
+        {
+            Ok(SidecarCommand::RenderCurrentSegment {
+                project_root: PathBuf::from(project_root),
+            })
+        }
+        [_, command, scope, project_root]
             if command == "render-markdown" && scope == "previous-hour" =>
         {
             Ok(SidecarCommand::RenderPreviousHour {
@@ -114,6 +128,14 @@ fn parse_command(args: &[String]) -> Result<SidecarCommand, String> {
                 project_root: PathBuf::from(project_root),
                 from: from.to_string(),
                 to: to.to_string(),
+            })
+        }
+        [_, command, scope, project_root, at_flag, at]
+            if command == "render-markdown" && scope == "segment-at" && at_flag == "--at" =>
+        {
+            Ok(SidecarCommand::RenderSegmentAt {
+                project_root: PathBuf::from(project_root),
+                at: at.to_string(),
             })
         }
         [_, command, snapshot_id] if command == "restore" => Ok(SidecarCommand::Restore {
@@ -183,6 +205,18 @@ fn run(command: SidecarCommand) -> ExitCode {
                 }
             }
         }
+        SidecarCommand::RenderCurrentSegment { project_root } => {
+            match runtime::render_current_segment_markdown(&project_root) {
+                Ok(value) => {
+                    print_json(&value);
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         SidecarCommand::RenderPreviousHour { project_root } => {
             match runtime::render_previous_hour_markdown(&project_root) {
                 Ok(value) => {
@@ -197,6 +231,18 @@ fn run(command: SidecarCommand) -> ExitCode {
         }
         SidecarCommand::RenderHour { project_root, hour } => {
             match runtime::render_hour_markdown(&project_root, &hour) {
+                Ok(value) => {
+                    print_json(&value);
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        SidecarCommand::RenderSegmentAt { project_root, at } => {
+            match runtime::render_segment_at_markdown(&project_root, &at) {
                 Ok(value) => {
                     print_json(&value);
                     ExitCode::SUCCESS
@@ -257,8 +303,10 @@ Usage:
   local-history-sidecar status <project-root>
   local-history-sidecar view-root <project-root>
   local-history-sidecar render-markdown current-hour <project-root>
+  local-history-sidecar render-markdown current-segment <project-root>
   local-history-sidecar render-markdown previous-hour <project-root>
   local-history-sidecar render-markdown hour <project-root> --hour <ISO-hour>
+  local-history-sidecar render-markdown segment-at <project-root> --at <ISO-datetime>
   local-history-sidecar render-markdown segment <project-root> --from <ISO-datetime> --to <ISO-datetime>
   local-history-sidecar restore <snapshot-id>
 "
@@ -339,6 +387,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_render_current_segment_command() {
+        let args = vec![
+            "local-history-sidecar".to_string(),
+            "render-markdown".to_string(),
+            "current-segment".to_string(),
+            ".".to_string(),
+        ];
+
+        assert_eq!(
+            parse_command(&args).expect("render current segment command must parse"),
+            SidecarCommand::RenderCurrentSegment {
+                project_root: PathBuf::from("."),
+            }
+        );
+    }
+
+    #[test]
     fn parses_render_hour_command() {
         let args = vec![
             "local-history-sidecar".to_string(),
@@ -354,6 +419,26 @@ mod tests {
             SidecarCommand::RenderHour {
                 project_root: PathBuf::from("."),
                 hour: "2026-05-02T14".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_render_segment_at_command() {
+        let args = vec![
+            "local-history-sidecar".to_string(),
+            "render-markdown".to_string(),
+            "segment-at".to_string(),
+            ".".to_string(),
+            "--at".to_string(),
+            "2026-05-02T14:14:28Z".to_string(),
+        ];
+
+        assert_eq!(
+            parse_command(&args).expect("render segment-at command must parse"),
+            SidecarCommand::RenderSegmentAt {
+                project_root: PathBuf::from("."),
+                at: "2026-05-02T14:14:28Z".to_string(),
             }
         );
     }

@@ -60,6 +60,18 @@ impl zed::Extension for LocalHistoryExtension {
                 )?;
                 render_markdown_output("current hour", &value)
             }
+            "local-history-current-segment" => {
+                expect_no_args(&command.name, &args)?;
+                let value = run_sidecar_json(
+                    worktree,
+                    vec![
+                        "render-markdown".to_string(),
+                        "current-segment".to_string(),
+                        worktree.root_path(),
+                    ],
+                )?;
+                render_markdown_output("current segment", &value)
+            }
             "local-history-previous-hour" => {
                 expect_no_args(&command.name, &args)?;
                 let value = run_sidecar_json(
@@ -85,6 +97,20 @@ impl zed::Extension for LocalHistoryExtension {
                     ],
                 )?;
                 render_markdown_output("selected hour", &value)
+            }
+            "local-history-segment" => {
+                let timestamp = expect_single_arg(&command.name, &args, "<YYYY-MM-DDTHH:MM:SSZ>")?;
+                let value = run_sidecar_json(
+                    worktree,
+                    vec![
+                        "render-markdown".to_string(),
+                        "segment-at".to_string(),
+                        worktree.root_path(),
+                        "--at".to_string(),
+                        timestamp.to_string(),
+                    ],
+                )?;
+                render_markdown_output("selected segment", &value)
             }
             "local-history-restore" => {
                 let snapshot_id = expect_single_arg(&command.name, &args, "<snapshot-id>")?;

@@ -12,7 +12,7 @@ use local_history_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, Time};
 
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(750);
 const WATCHER_STALE_AFTER: u64 = 5;
@@ -206,6 +206,18 @@ pub fn render_current_hour_markdown(project_root: &Path) -> RuntimeResult<Value>
 pub fn render_previous_hour_markdown(project_root: &Path) -> RuntimeResult<Value> {
     let previous_hour = current_hour_string(-1)?;
     render_hour_markdown(project_root, &previous_hour)
+}
+
+pub fn render_current_segment_markdown(project_root: &Path) -> RuntimeResult<Value> {
+    let (from, to) = segment_bounds_at(OffsetDateTime::now_utc())?;
+    render_segment_markdown(project_root, &from, &to)
+}
+
+pub fn render_segment_at_markdown(project_root: &Path, at: &str) -> RuntimeResult<Value> {
+    let timestamp = OffsetDateTime::parse(at, &Rfc3339)
+        .map_err(|error| format!("failed to parse segment timestamp `{at}`: {error}"))?;
+    let (from, to) = segment_bounds_at(timestamp)?;
+    render_segment_markdown(project_root, &from, &to)
 }
 
 pub fn render_hour_markdown(project_root: &Path, hour: &str) -> RuntimeResult<Value> {
@@ -546,6 +558,21 @@ fn current_hour_string(hour_offset: i64) -> RuntimeResult<String> {
         .map_err(|error| format!("failed to format ISO hour: {error}"))
 }
 
+fn segment_bounds_at(timestamp: OffsetDateTime) -> RuntimeResult<(String, String)> {
+    let segment_minute = (timestamp.minute() / 10) * 10;
+    let segment_time = Time::from_hms(timestamp.hour(), segment_minute, 0)
+        .map_err(|error| format!("failed to build segment time: {error}"))?;
+    let from = timestamp.replace_time(segment_time);
+    let to = from + time::Duration::minutes(10);
+
+    Ok((
+        from.format(&Rfc3339)
+            .map_err(|error| format!("failed to format segment start: {error}"))?,
+        to.format(&Rfc3339)
+            .map_err(|error| format!("failed to format segment end: {error}"))?,
+    ))
+}
+
 fn current_unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -556,13 +583,15 @@ fn current_unix_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        diff_project_states, reconcile_project_state, scan_project, status_is_fresh, FileState,
-        ProjectState, WatcherStatusRecord,
+        diff_project_states, reconcile_project_state, scan_project, segment_bounds_at,
+        status_is_fresh, FileState, ProjectState, WatcherStatusRecord,
     };
     use local_history_core::{LocalHistoryStore, SnapshotKind};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use time::format_description::well_known::Rfc3339;
+    use time::OffsetDateTime;
 
     #[test]
     fn scan_project_skips_ignored_paths() {
@@ -690,6 +719,17 @@ mod tests {
         };
 
         assert!(status_is_fresh(&record));
+    }
+
+    #[test]
+    fn segment_bounds_round_down_to_fixed_ten_minute_window() {
+        let timestamp =
+            OffsetDateTime::parse("2026-05-02T14:14:28Z", &Rfc3339).expect("timestamp must parse");
+
+        let (from, to) = segment_bounds_at(timestamp).expect("segment bounds must resolve");
+
+        assert_eq!(from, "2026-05-02T14:10:00Z");
+        assert_eq!(to, "2026-05-02T14:20:00Z");
     }
 
     fn state_with_file(relative_path: &str, contents: &[u8]) -> ProjectState {

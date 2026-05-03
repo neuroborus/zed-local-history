@@ -37,8 +37,10 @@ The native sidecar now already exposes real JSON `health`, `status`, `watch`, an
 - `/local-history-view`
 - `/local-history-start-watcher`
 - `/local-history-current-hour`
+- `/local-history-current-segment`
 - `/local-history-previous-hour`
 - `/local-history-hour <YYYY-MM-DDTHH>`
+- `/local-history-segment <YYYY-MM-DDTHH:MM:SSZ>`
 - `/local-history-restore <snapshot-id>`
 
 Current behavior:
@@ -46,7 +48,7 @@ Current behavior:
 - `status` calls `local-history-sidecar status <project-root>`
 - `start-watcher` calls `local-history-sidecar ensure-daemon <project-root>`
 - `view` exposes the generated Markdown view root path
-- `current-hour`, `previous-hour`, and `hour` call sidecar Markdown render commands and return the generated file path
+- `current-hour`, `current-segment`, `previous-hour`, `hour`, and `segment` call sidecar Markdown render commands and return the generated file path
 - `restore` calls `local-history-sidecar restore <snapshot-id>`
 - if `local-history-sidecar` is not on `PATH`, the extension tries to download the matching sidecar release asset for the current version from GitHub and reuse it from the extension work directory
 
