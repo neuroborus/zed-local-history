@@ -68,6 +68,14 @@ pub fn health_value() -> Value {
     })
 }
 
+pub fn version_value() -> Value {
+    json!({
+        "status": "ok",
+        "service": "local-history-sidecar",
+        "sidecar_version": env!("CARGO_PKG_VERSION"),
+    })
+}
+
 pub fn watch(project_root: &Path) -> RuntimeResult<()> {
     let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
     let project_root = store.project().root.clone();

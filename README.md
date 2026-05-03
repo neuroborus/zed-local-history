@@ -11,7 +11,7 @@ This repository is set up around the product direction captured in [agents/GOALS
 
 The documented architecture also leaves room for an MCP server surface for Zed Agent workflows, but that remains separate from the current MVP path.
 
-The repository now has a real storage-backed recovery path for manual CLI snapshots and safe restore flows, a polling-based sidecar watcher with `watch`, `ensure-daemon`, and `status`, generated Markdown history views for hour/segment browsing, and a real Zed slash-command integration layer with sidecar bootstrap. The extension now resolves `local-history-sidecar` from `PATH` for dev workflows, otherwise falls back to a cached/downloaded GitHub release asset for supported platforms, and can trigger both hour and fixed 10-minute segment Markdown renders.
+The repository now has a real storage-backed recovery path for manual CLI snapshots and safe restore flows, a polling-based sidecar watcher with `watch`, `ensure-daemon`, and `status`, generated Markdown history views for hour/segment browsing, and a real Zed slash-command integration layer with sidecar bootstrap. The extension now resolves `local-history-sidecar` from `PATH` for dev workflows, otherwise falls back to a cached/downloaded GitHub release asset for supported platforms, verifies sidecar version compatibility before use, and can trigger both hour and fixed 10-minute segment Markdown renders.
 
 ## What is here
 
@@ -63,6 +63,7 @@ cargo run -p local-history-cli -- browse .
 cargo run -p local-history-cli -- undo-restore .
 cargo run -p local-history-cli -- restore-last-safety .
 cargo run -p local-history-sidecar -- health
+cargo run -p local-history-sidecar -- version
 cargo run -p local-history-sidecar -- status .
 cargo run -p local-history-sidecar -- ensure-daemon .
 cargo run -p local-history-sidecar -- render-markdown current-segment .
@@ -102,7 +103,9 @@ The `editors/zed` package follows the current documented Zed extension shape:
 
 Zed also supports MCP servers for the Agent Panel, either through direct user `context_servers` settings or through extension-managed MCP server registration. The project docs treat that as an additive integration path, not as a replacement for CLI and Markdown recovery.
 
-The current extension no longer returns placeholder text. It resolves `local-history-sidecar` from `PATH` for dev installs, otherwise downloads and caches a matching GitHub release asset in the extension work directory, then calls real sidecar commands for status / watcher startup / hour rendering / segment rendering / restore. Because the current extension API does not expose a direct "open arbitrary external file" action, the MVP path is to print or reveal the generated Markdown path in a usable way rather than pretending it can always be opened automatically.
+The current extension no longer returns placeholder text. It resolves `local-history-sidecar` from `PATH` for dev installs, otherwise downloads and caches a matching GitHub release asset in the extension work directory, then calls real sidecar commands for status / watcher startup / hour rendering / segment rendering / restore. Before using a discovered binary, the extension probes `local-history-sidecar version` and requires a compatible sidecar version; an outdated `PATH` binary is ignored in favor of the bundled release path. Because the current extension API does not expose a direct "open arbitrary external file" action, the MVP path is to print or reveal the generated Markdown path in a usable way rather than pretending it can always be opened automatically.
+
+Tagged GitHub releases now also publish `SHA256SUMS.txt` alongside platform archives and fixed-name sidecar assets.
 
 Current Zed-facing commands now cover:
 

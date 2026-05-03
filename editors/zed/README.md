@@ -17,7 +17,7 @@ Zed's documented MCP server support also creates a second possible integration r
 ## Current shape
 
 - `extension.toml` declares the extension manifest and slash commands.
-- `src/lib.rs` resolves `local-history-sidecar` from `PATH` for dev installs, otherwise downloads a matching GitHub release asset into the extension work directory and calls real sidecar commands from slash-command handlers.
+- `src/lib.rs` resolves `local-history-sidecar` from `PATH` for dev installs, otherwise downloads a matching GitHub release asset into the extension work directory, verifies sidecar version compatibility, and calls real sidecar commands from slash-command handlers.
 - The extension is kept outside the root workspace because it follows Zed's WebAssembly packaging model and will evolve on its own cadence.
 
 ## Planned responsibilities
@@ -50,12 +50,13 @@ Current behavior:
 - `view` exposes the generated Markdown view root path
 - `current-hour`, `current-segment`, `previous-hour`, `hour`, and `segment` call sidecar Markdown render commands and return the generated file path
 - `restore` calls `local-history-sidecar restore <snapshot-id>`
-- if `local-history-sidecar` is not on `PATH`, the extension tries to download the matching sidecar release asset for the current version from GitHub and reuse it from the extension work directory
+- the extension probes `local-history-sidecar version` before use; if a `PATH` binary is missing or too old, it falls back to the cached/downloaded release asset for the current extension version
+- tagged releases publish `SHA256SUMS.txt` alongside the archives that the extension bootstrap relies on
 
 Current limitations:
 
 - the extension API does not provide a direct "open arbitrary external file path" action, so the MVP path is to expose the generated Markdown path instead of pretending it can always auto-open it
-- sidecar bootstrap currently depends on GitHub release assets with stable names; the workflow now produces those assets, but the full packaging/release story still belongs to later-stage release hardening
+- sidecar bootstrap currently depends on GitHub release assets with stable names; the workflow now produces those assets plus release checksums, but the full packaging/release story still belongs to later-stage release hardening
 
 If MCP integration is added, these commands may coexist with Agent Panel tools rather than being replaced by them.
 

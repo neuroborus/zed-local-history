@@ -7,6 +7,7 @@ use zed_extension_api as zed;
 
 const RELEASE_REPOSITORY: &str = "neuroborus/zed-local-history";
 const SIDECAR_BINARY_STEM: &str = "local-history-sidecar";
+const MINIMUM_COMPATIBLE_SIDECAR_VERSION: &str = "0.1.0";
 
 struct LocalHistoryExtension;
 
@@ -165,7 +166,15 @@ fn expect_single_arg<'a>(
 
 fn run_sidecar_json(worktree: &zed::Worktree, args: Vec<String>) -> Result<Value, String> {
     let binary = resolve_sidecar_binary(worktree)?;
-    let mut command = ProcessCommand::new(binary.clone())
+    run_sidecar_json_with_binary(worktree, &binary, args)
+}
+
+fn run_sidecar_json_with_binary(
+    worktree: &zed::Worktree,
+    binary: &str,
+    args: Vec<String>,
+) -> Result<Value, String> {
+    let mut command = ProcessCommand::new(binary)
         .args(args.iter().cloned())
         .envs(worktree.shell_env());
     let output = command
@@ -194,7 +203,9 @@ fn resolve_sidecar_binary(worktree: &zed::Worktree) -> Result<String, String> {
     let (os, architecture) = zed::current_platform();
 
     if let Some(path) = sidecar_on_path(worktree, os) {
-        return Ok(path);
+        if sidecar_is_compatible(worktree, &path)? {
+            return Ok(path);
+        }
     }
 
     let target = release_target(os, architecture)?;
@@ -202,14 +213,23 @@ fn resolve_sidecar_binary(worktree: &zed::Worktree) -> Result<String, String> {
 
     if binary_exists(&cached_path) {
         ensure_binary_executable(target, &cached_path)?;
-        return Ok(cached_path);
+
+        if sidecar_is_compatible(worktree, &cached_path)? {
+            return Ok(cached_path);
+        }
     }
 
     install_sidecar_release(target)?;
     ensure_binary_executable(target, &cached_path)?;
 
     if binary_exists(&cached_path) {
-        Ok(cached_path)
+        let version = sidecar_version(worktree, &cached_path)?;
+
+        if is_compatible_sidecar_version(&version)? {
+            Ok(cached_path)
+        } else {
+            Err(incompatible_sidecar_error(&cached_path, &version))
+        }
     } else {
         Err(format!(
             "downloaded `{}` for {}, but `{cached_path}` was not found after extraction",
@@ -238,6 +258,20 @@ fn install_sidecar_release(target: ReleaseTarget) -> Result<(), String> {
     cleanup_old_installs(&install_dir)?;
 
     Ok(())
+}
+
+fn sidecar_is_compatible(worktree: &zed::Worktree, binary: &str) -> Result<bool, String> {
+    match sidecar_version(worktree, binary) {
+        Ok(version) => is_compatible_sidecar_version(&version),
+        Err(_) => Ok(false),
+    }
+}
+
+fn sidecar_version(worktree: &zed::Worktree, binary: &str) -> Result<String, String> {
+    let value = run_sidecar_json_with_binary(worktree, binary, vec!["version".to_string()])?;
+    json_string(&value, "sidecar_version")
+        .map(str::to_string)
+        .ok_or_else(|| format!("`{binary} version` did not return `sidecar_version`"))
 }
 
 fn sidecar_on_path(worktree: &zed::Worktree, os: Os) -> Option<String> {
@@ -367,6 +401,10 @@ fn release_tag() -> String {
     format!("v{}", env!("CARGO_PKG_VERSION"))
 }
 
+fn extension_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 fn install_directory_name() -> String {
     format!("local-history-sidecar-{}", env!("CARGO_PKG_VERSION"))
 }
@@ -431,6 +469,53 @@ fn platform_label(os: Os, architecture: Architecture) -> &'static str {
     }
 }
 
+fn is_compatible_sidecar_version(version: &str) -> Result<bool, String> {
+    Ok(parse_semver_triplet(version)? >= parse_semver_triplet(MINIMUM_COMPATIBLE_SIDECAR_VERSION)?)
+}
+
+fn incompatible_sidecar_error(binary: &str, version: &str) -> String {
+    format!(
+        "local-history extension {} requires sidecar >= {}, but `{binary}` reports {}",
+        extension_version(),
+        MINIMUM_COMPATIBLE_SIDECAR_VERSION,
+        version
+    )
+}
+
+fn parse_semver_triplet(version: &str) -> Result<(u64, u64, u64), String> {
+    let version = version
+        .split_once('-')
+        .map(|(core, _)| core)
+        .unwrap_or(version);
+    let version = version
+        .split_once('+')
+        .map(|(core, _)| core)
+        .unwrap_or(version);
+    let mut parts = version.split('.');
+
+    let major = parts
+        .next()
+        .ok_or_else(|| format!("invalid version `{version}`"))?
+        .parse::<u64>()
+        .map_err(|error| format!("invalid major version in `{version}`: {error}"))?;
+    let minor = parts
+        .next()
+        .ok_or_else(|| format!("invalid version `{version}`"))?
+        .parse::<u64>()
+        .map_err(|error| format!("invalid minor version in `{version}`: {error}"))?;
+    let patch = parts
+        .next()
+        .ok_or_else(|| format!("invalid version `{version}`"))?
+        .parse::<u64>()
+        .map_err(|error| format!("invalid patch version in `{version}`: {error}"))?;
+
+    if parts.next().is_some() {
+        return Err(format!("invalid version `{version}`"));
+    }
+
+    Ok((major, minor, patch))
+}
+
 fn json_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key)?.as_str()
 }
@@ -467,7 +552,10 @@ fn json_value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{install_directory_name, release_tag, release_target, ReleaseTarget};
+    use super::{
+        extension_version, install_directory_name, is_compatible_sidecar_version,
+        parse_semver_triplet, release_tag, release_target, ReleaseTarget,
+    };
     use zed_extension_api::{Architecture, DownloadedFileType, Os};
 
     #[test]
@@ -487,7 +575,36 @@ mod tests {
     #[test]
     fn version_helpers_follow_package_version() {
         assert_eq!(release_tag(), "v0.1.0");
+        assert_eq!(extension_version(), "0.1.0");
         assert_eq!(install_directory_name(), "local-history-sidecar-0.1.0");
+    }
+
+    #[test]
+    fn parses_semver_triplets_with_optional_suffixes() {
+        assert_eq!(
+            parse_semver_triplet("1.2.3").expect("plain semver must parse"),
+            (1, 2, 3)
+        );
+        assert_eq!(
+            parse_semver_triplet("1.2.3-rc.1").expect("pre-release semver must parse"),
+            (1, 2, 3)
+        );
+        assert_eq!(
+            parse_semver_triplet("1.2.3+build.7").expect("build metadata semver must parse"),
+            (1, 2, 3)
+        );
+    }
+
+    #[test]
+    fn compatibility_check_uses_minimum_sidecar_version() {
+        assert!(
+            is_compatible_sidecar_version("0.1.0").expect("matching version must be compatible")
+        );
+        assert!(
+            is_compatible_sidecar_version("0.1.5").expect("newer patch version must be compatible")
+        );
+        assert!(!is_compatible_sidecar_version("0.0.9")
+            .expect("older sidecar version must be incompatible"));
     }
 }
 

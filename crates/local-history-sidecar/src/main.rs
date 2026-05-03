@@ -7,6 +7,7 @@ use std::process::ExitCode;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SidecarCommand {
     Health,
+    Version,
     Watch {
         project_root: PathBuf,
         daemon_mode: bool,
@@ -66,6 +67,7 @@ fn parse_command(args: &[String]) -> Result<SidecarCommand, String> {
         [_] => Ok(SidecarCommand::Help),
         [_, command] if command == "-h" || command == "--help" => Ok(SidecarCommand::Help),
         [_, command] if command == "health" => Ok(SidecarCommand::Health),
+        [_, command] if command == "version" => Ok(SidecarCommand::Version),
         [_, command, project_root] if command == "watch" => Ok(SidecarCommand::Watch {
             project_root: PathBuf::from(project_root),
             daemon_mode: false,
@@ -149,6 +151,10 @@ fn run(command: SidecarCommand) -> ExitCode {
     match command {
         SidecarCommand::Health => {
             print_json(&runtime::health_value());
+            ExitCode::SUCCESS
+        }
+        SidecarCommand::Version => {
+            print_json(&runtime::version_value());
             ExitCode::SUCCESS
         }
         SidecarCommand::Watch {
@@ -298,6 +304,7 @@ local-history-sidecar
 
 Usage:
   local-history-sidecar health
+  local-history-sidecar version
   local-history-sidecar watch <project-root>
   local-history-sidecar ensure-daemon <project-root>
   local-history-sidecar status <project-root>
@@ -332,6 +339,16 @@ mod tests {
                 project_root: PathBuf::from("."),
                 daemon_mode: false,
             }
+        );
+    }
+
+    #[test]
+    fn parses_version_command() {
+        let args = vec!["local-history-sidecar".to_string(), "version".to_string()];
+
+        assert_eq!(
+            parse_command(&args).expect("version command must parse"),
+            SidecarCommand::Version
         );
     }
 

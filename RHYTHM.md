@@ -2,6 +2,10 @@
 
 Chronological log of meaningful repo decisions. **Newest sections first:** add each new `## YYYY-MM-DD` block right below this paragraph, not at the end of the file.
 
+## 2026-05-03
+
+- Stage 11 release hardening has started. The native sidecar now exposes a JSON `version` command, the Zed extension probes sidecar version compatibility before using a `PATH` or cached binary and falls back to the matching release asset when needed, and tagged GitHub releases now publish `SHA256SUMS.txt` alongside the platform archives and fixed-name sidecar bootstrap assets.
+
 ## 2026-05-02
 
 - Stage 10 Zed command coverage now includes fixed 10-minute segment helpers instead of only hour-level wrappers. `local-history-sidecar` exposes `render-markdown current-segment` and `render-markdown segment-at --at <ISO-datetime>`, keeping segment-window normalization in the native layer, and the Zed extension now exposes matching `/local-history-current-segment` and `/local-history-segment <ISO-datetime>` slash commands over the same contract.
