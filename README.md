@@ -55,6 +55,7 @@ cargo run -p local-history-cli -- view-root .
 cargo run -p local-history-cli -- render-markdown hour . --hour 2026-05-02T14
 cargo run -p local-history-cli -- render-markdown segment . --from 2026-05-02T14:10:00Z --to 2026-05-02T14:20:00Z
 cargo run -p local-history-cli -- rebuild-markdown-view .
+cargo run -p local-history-cli -- prune .
 cargo run -p local-history-cli -- show <snapshot-id>
 cargo run -p local-history-cli -- restore <snapshot-id>
 cargo run -p local-history-cli -- restore --project-root . --recent 1
@@ -74,12 +75,14 @@ Current CLI behavior:
 - `recent` lists raw user snapshots only, so safety snapshots do not pollute normal restore numbering.
 - `list` adds paginated browsing with `--page` and `--page-size`.
 - `recent`, `list`, `show`, `status`, and `safety-list` support `--json`.
+- `status` also exposes the default retention policy: `250` snapshots per file, `512 MiB` estimated project storage, `4 MiB` max snapshot file size, and `30` days max snapshot age.
 - `recent`, `list`, and `safety-list` support `--file`, `--from`, `--to`, and `--hour YYYY-MM-DDTHH`.
 - `browse` provides a minimal interactive recovery loop with next/previous navigation, snapshot preview, and restore confirmation.
 - `history hour` and `history segment` group raw snapshots into fixed 10-minute windows and list affected files with exact snapshot IDs preserved.
 - `render-markdown hour` generates a browsable hour directory with `README.md`, six fixed segment pages, and exact snapshot Markdown pages under `view/<date>/<hour>/`.
 - `render-markdown segment` validates a fixed 10-minute window and refreshes the parent hour view before returning the exact segment Markdown path.
 - `view-root` prints the Markdown view root; `rebuild-markdown-view` clears and rebuilds the full filesystem-browsable Markdown tree from raw snapshots.
+- `prune` applies the default retention policy, preserves only the latest restore/undo chain needed for current undo behavior, removes stale restore-operation rows and orphaned blobs, and rebuilds the Markdown view.
 - `restore` always creates a safety snapshot first, records a restore operation, and then applies the target snapshot.
 - `undo-restore` replays the latest safety snapshot for the project.
 - `restore-last-safety` is an explicit escape hatch to restore the newest safety snapshot directly.
@@ -90,6 +93,7 @@ Current sidecar behavior:
 - `watch <project-root>` performs an initial scan, applies default ignore rules, and then polls for saved file changes.
 - when a tracked file changes, the sidecar stores the previous known state as a raw snapshot;
 - when a tracked file is deleted, the sidecar stores the previous known state before dropping it from the cache;
+- files larger than the current retention limit are skipped instead of repeatedly failing the watcher loop;
 - `ensure-daemon <project-root>` starts a background watcher if there is no fresh heartbeat;
 - `status <project-root>` reports watcher state from the sidecar heartbeat file.
 

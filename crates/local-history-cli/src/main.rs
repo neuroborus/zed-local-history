@@ -5,9 +5,9 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use local_history_core::{
-    default_data_dir, project_id_for_root, HourHistory, LocalHistoryStore, RestoreOutcome,
-    SegmentHistory, SnapshotId, SnapshotKind, SnapshotPage, SnapshotQuery, SnapshotRecord,
-    SnapshotWriteRequest, StorageLayout, WindowedFileHistory,
+    default_data_dir, project_id_for_root, HourHistory, LocalHistoryStore, PruneReport,
+    RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId, SnapshotKind, SnapshotPage,
+    SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout, WindowedFileHistory,
 };
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
@@ -147,6 +147,11 @@ enum Commands {
     RebuildMarkdownView {
         project_root: PathBuf,
     },
+    Prune {
+        project_root: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     RenderMarkdown {
         #[command(subcommand)]
         command: RenderMarkdownCommands,
@@ -208,6 +213,7 @@ fn run(cli: Cli) -> Result<(), String> {
             filters,
         } => browse_snapshots(&project_root, page_size, &filters),
         Commands::RebuildMarkdownView { project_root } => rebuild_markdown_view(&project_root),
+        Commands::Prune { project_root, json } => prune_history(&project_root, json),
         Commands::RenderMarkdown { command } => run_render_markdown_command(command),
     }
 }
@@ -310,6 +316,49 @@ fn rebuild_markdown_view(project_root: &Path) -> Result<(), String> {
     println!("view_root={}", layout.view_dir.display());
     println!("generated_entries={}", entries.len());
     println!("index={}", layout.view_dir.join("README.md").display());
+
+    Ok(())
+}
+
+fn prune_history(project_root: &Path, json_output: bool) -> Result<(), String> {
+    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
+    let policy = store.retention_policy();
+    let report = store
+        .prune(&policy, &current_timestamp()?)
+        .map_err(|error| error.to_string())?;
+
+    if json_output {
+        return print_json_value(&prune_report_json(&store, &policy, &report));
+    }
+
+    println!("prune complete");
+    println!("project_root={}", store.project().root.display());
+    println!("project_id={}", store.project().id.as_str());
+    println!("pruned_at={}", human_timestamp(&report.pruned_at));
+    println!(
+        "deleted_restore_operations={} deleted_snapshots={} deleted_blobs={} deleted_blob_bytes={}",
+        report.deleted_restore_operation_count,
+        report.deleted_snapshot_count,
+        report.deleted_blob_count,
+        report.deleted_blob_bytes
+    );
+    println!(
+        "remaining_snapshots={} remaining_referenced_blob_bytes={}",
+        report.remaining_snapshot_count, report.remaining_referenced_blob_bytes
+    );
+    println!(
+        "pruned_for_age={} pruned_for_file_count={} pruned_for_storage={}",
+        report.pruned_for_age_count, report.pruned_for_file_count, report.pruned_for_storage_count
+    );
+    println!("protected_snapshots={}", report.protected_snapshot_count);
+    println!("rebuilt_markdown_view={}", report.rebuilt_markdown_view);
+    println!(
+        "policy=max_snapshots_per_file:{} max_project_storage_bytes:{} max_file_size_bytes:{} max_snapshot_age_days:{}",
+        policy.max_snapshots_per_file,
+        policy.max_project_storage_bytes,
+        policy.max_file_size_bytes,
+        policy.max_snapshot_age_days
+    );
 
     Ok(())
 }
@@ -690,6 +739,7 @@ fn print_restore_outcome(label: &str, outcome: &RestoreOutcome) {
 fn print_status(project_root: &Path, json_output: bool) -> Result<(), String> {
     let project_id = project_id_for_root(project_root);
     let layout = StorageLayout::for_project(default_data_dir(), project_id.clone());
+    let retention_policy = RetentionPolicy::default();
 
     if json_output {
         return print_json_value(&json!({
@@ -698,6 +748,7 @@ fn print_status(project_root: &Path, json_output: bool) -> Result<(), String> {
             "data_dir": layout.project_dir.display().to_string(),
             "database": layout.database_path.display().to_string(),
             "view_root": layout.view_dir.display().to_string(),
+            "retention_policy": retention_policy_json(&retention_policy),
         }));
     }
 
@@ -706,6 +757,13 @@ fn print_status(project_root: &Path, json_output: bool) -> Result<(), String> {
     println!("data_dir={}", layout.project_dir.display());
     println!("database={}", layout.database_path.display());
     println!("view_root={}", layout.view_dir.display());
+    println!(
+        "retention_policy=max_snapshots_per_file:{} max_project_storage_bytes:{} max_file_size_bytes:{} max_snapshot_age_days:{}",
+        retention_policy.max_snapshots_per_file,
+        retention_policy.max_project_storage_bytes,
+        retention_policy.max_file_size_bytes,
+        retention_policy.max_snapshot_age_days
+    );
 
     Ok(())
 }
@@ -949,6 +1007,41 @@ fn hour_history_json(store: &LocalHistoryStore, history: &HourHistory) -> Value 
     })
 }
 
+fn retention_policy_json(policy: &RetentionPolicy) -> Value {
+    json!({
+        "max_snapshots_per_file": policy.max_snapshots_per_file,
+        "max_project_storage_bytes": policy.max_project_storage_bytes,
+        "max_file_size_bytes": policy.max_file_size_bytes,
+        "max_snapshot_age_days": policy.max_snapshot_age_days,
+    })
+}
+
+fn prune_report_json(
+    store: &LocalHistoryStore,
+    policy: &RetentionPolicy,
+    report: &PruneReport,
+) -> Value {
+    json!({
+        "project_id": store.project().id.as_str(),
+        "project_root": store.project().root.display().to_string(),
+        "policy": retention_policy_json(policy),
+        "report": {
+            "pruned_at": report.pruned_at,
+            "deleted_restore_operation_count": report.deleted_restore_operation_count,
+            "deleted_snapshot_count": report.deleted_snapshot_count,
+            "deleted_blob_count": report.deleted_blob_count,
+            "deleted_blob_bytes": report.deleted_blob_bytes,
+            "remaining_snapshot_count": report.remaining_snapshot_count,
+            "remaining_referenced_blob_bytes": report.remaining_referenced_blob_bytes,
+            "protected_snapshot_count": report.protected_snapshot_count,
+            "pruned_for_age_count": report.pruned_for_age_count,
+            "pruned_for_file_count": report.pruned_for_file_count,
+            "pruned_for_storage_count": report.pruned_for_storage_count,
+            "rebuilt_markdown_view": report.rebuilt_markdown_view,
+        }
+    })
+}
+
 fn print_json_value(value: &Value) -> Result<(), String> {
     let rendered = serde_json::to_string_pretty(value)
         .map_err(|error| format!("failed to render JSON: {error}"))?;
@@ -1183,6 +1276,20 @@ mod tests {
         match cli.command {
             Commands::RebuildMarkdownView { project_root } => {
                 assert_eq!(project_root, PathBuf::from("."));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_prune_command() {
+        let cli = Cli::try_parse_from(["local-history", "prune", ".", "--json"])
+            .expect("CLI parse must succeed");
+
+        match cli.command {
+            Commands::Prune { project_root, json } => {
+                assert_eq!(project_root, PathBuf::from("."));
+                assert!(json);
             }
             other => panic!("unexpected command: {other:?}"),
         }

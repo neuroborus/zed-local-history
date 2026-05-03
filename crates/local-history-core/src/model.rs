@@ -198,6 +198,41 @@ pub struct GeneratedMarkdownViewEntry {
     pub generated_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetentionPolicy {
+    pub max_snapshots_per_file: usize,
+    pub max_project_storage_bytes: u64,
+    pub max_file_size_bytes: u64,
+    pub max_snapshot_age_days: u16,
+}
+
+impl Default for RetentionPolicy {
+    fn default() -> Self {
+        Self {
+            max_snapshots_per_file: 250,
+            max_project_storage_bytes: 512 * 1024 * 1024,
+            max_file_size_bytes: 4 * 1024 * 1024,
+            max_snapshot_age_days: 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PruneReport {
+    pub pruned_at: String,
+    pub deleted_restore_operation_count: usize,
+    pub deleted_snapshot_count: usize,
+    pub deleted_blob_count: usize,
+    pub deleted_blob_bytes: u64,
+    pub remaining_snapshot_count: usize,
+    pub remaining_referenced_blob_bytes: u64,
+    pub protected_snapshot_count: usize,
+    pub pruned_for_age_count: usize,
+    pub pruned_for_file_count: usize,
+    pub pruned_for_storage_count: usize,
+    pub rebuilt_markdown_view: bool,
+}
+
 pub fn segment_label(hour: u8, minute: u8) -> Option<String> {
     if hour > 23 || minute > 59 {
         return None;
@@ -221,9 +256,9 @@ pub fn segment_label(hour: u8, minute: u8) -> Option<String> {
 mod tests {
     use super::{
         segment_label, CompressionKind, ContentBlobRecord, ContentHash, GeneratedMarkdownViewEntry,
-        HourBucket, HourHistory, ProjectId, ProjectRecord, RestoreOperationRecord, RestoreOutcome,
-        SegmentHistory, SnapshotId, SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord,
-        WindowedFileHistory,
+        HourBucket, HourHistory, ProjectId, ProjectRecord, PruneReport, RestoreOperationRecord,
+        RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId, SnapshotKind, SnapshotRecord,
+        TimeSegment, TrackedFileRecord, WindowedFileHistory,
     };
     use std::path::PathBuf;
 
@@ -241,6 +276,7 @@ mod tests {
         let content_hash = ContentHash::new("hash");
         let raw_snapshot_id = SnapshotId::new("raw-1");
         let safety_snapshot_id = SnapshotId::new("safety-1");
+        let retention_policy = RetentionPolicy::default();
 
         let project = ProjectRecord {
             id: project_id.clone(),
@@ -322,6 +358,20 @@ mod tests {
             title: "14:10-14:20".to_string(),
             generated_at: "2026-05-02T14:20:00+02:00".to_string(),
         };
+        let prune_report = PruneReport {
+            pruned_at: "2026-05-03T09:00:00Z".to_string(),
+            deleted_restore_operation_count: 1,
+            deleted_snapshot_count: 1,
+            deleted_blob_count: 1,
+            deleted_blob_bytes: 64,
+            remaining_snapshot_count: 2,
+            remaining_referenced_blob_bytes: 128,
+            protected_snapshot_count: 1,
+            pruned_for_age_count: 1,
+            pruned_for_file_count: 0,
+            pruned_for_storage_count: 0,
+            rebuilt_markdown_view: true,
+        };
 
         assert_eq!(project.id.as_str(), "project-id");
         assert_eq!(project.root, PathBuf::from("/workspace/demo"));
@@ -341,5 +391,15 @@ mod tests {
             view_entry.relative_markdown_path,
             PathBuf::from("2026-05-02/14/14-10__14-20.md")
         );
+        assert_eq!(retention_policy.max_snapshots_per_file, 250);
+        assert_eq!(
+            retention_policy.max_project_storage_bytes,
+            512 * 1024 * 1024
+        );
+        assert_eq!(retention_policy.max_file_size_bytes, 4 * 1024 * 1024);
+        assert_eq!(retention_policy.max_snapshot_age_days, 30);
+        assert_eq!(prune_report.deleted_restore_operation_count, 1);
+        assert_eq!(prune_report.deleted_snapshot_count, 1);
+        assert!(prune_report.rebuilt_markdown_view);
     }
 }

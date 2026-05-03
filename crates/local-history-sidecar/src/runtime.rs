@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use local_history_core::{
     matches_default_ignored_path, normalize_project_root, LocalHistoryStore, SnapshotId,
-    SnapshotKind, SnapshotWriteRequest, StorageLayout,
+    SnapshotKind, SnapshotWriteRequest, StorageError, StorageLayout,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -421,16 +421,18 @@ fn reconcile_project_state(
     current: &ProjectState,
 ) -> RuntimeResult<()> {
     for candidate in diff_project_states(previous, current) {
-        store
-            .store_snapshot(SnapshotWriteRequest {
-                relative_path: candidate.relative_path,
-                contents: candidate.previous_state.contents,
-                timestamp: current_timestamp()?,
-                kind: SnapshotKind::Raw,
-                is_binary: candidate.previous_state.is_binary,
-                captures_missing_file: false,
-            })
-            .map_err(|error| error.to_string())?;
+        match store.store_snapshot(SnapshotWriteRequest {
+            relative_path: candidate.relative_path,
+            contents: candidate.previous_state.contents,
+            timestamp: current_timestamp()?,
+            kind: SnapshotKind::Raw,
+            is_binary: candidate.previous_state.is_binary,
+            captures_missing_file: false,
+        }) {
+            Ok(_) => {}
+            Err(StorageError::SnapshotTooLarge { .. }) => continue,
+            Err(error) => return Err(error.to_string()),
+        }
     }
 
     Ok(())

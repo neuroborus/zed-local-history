@@ -13,9 +13,9 @@ use crate::identity::{normalize_project_root, project_id_for_root};
 use crate::layout::{default_data_dir, StorageLayout};
 use crate::model::{
     segment_label, CompressionKind, ContentBlobRecord, ContentHash, GeneratedMarkdownViewEntry,
-    HourBucket, HourHistory, ProjectId, ProjectRecord, RestoreOperationRecord, RestoreOutcome,
-    SegmentHistory, SnapshotId, SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord,
-    WindowedFileHistory,
+    HourBucket, HourHistory, ProjectId, ProjectRecord, PruneReport, RestoreOperationRecord,
+    RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId, SnapshotKind, SnapshotRecord,
+    TimeSegment, TrackedFileRecord, WindowedFileHistory,
 };
 
 const SCHEMA_SQL: &str = r#"
@@ -141,6 +141,12 @@ struct CurrentFileState {
     contents: Vec<u8>,
     is_binary: bool,
     existed: bool,
+}
+
+#[derive(Debug, Clone)]
+struct BlobReferenceStats {
+    ref_counts: HashMap<ContentHash, usize>,
+    total_bytes: u64,
 }
 
 impl LocalHistoryStore {
@@ -390,6 +396,143 @@ impl LocalHistoryStore {
             .items)
     }
 
+    pub fn retention_policy(&self) -> RetentionPolicy {
+        RetentionPolicy::default()
+    }
+
+    pub fn prune(
+        &self,
+        policy: &RetentionPolicy,
+        pruned_at: &str,
+    ) -> Result<PruneReport, StorageError> {
+        let pruned_at = parse_rfc3339(pruned_at)?.to_offset(UtcOffset::UTC);
+        let all_snapshots = self.all_snapshots_newest_first()?;
+        let latest_restore_operation = self.latest_restore_operation()?;
+        let protected_snapshot_ids =
+            protected_snapshot_ids_for_prune(latest_restore_operation.as_ref());
+        let protected_snapshot_count = protected_snapshot_ids.len();
+        let deleted_restore_operation_count =
+            self.prune_restore_operations(latest_restore_operation.as_ref())?;
+        let cutoff = pruned_at - Duration::days(policy.max_snapshot_age_days as i64);
+        let mut kept_snapshot_ids = all_snapshots
+            .iter()
+            .map(|snapshot| snapshot.id.clone())
+            .collect::<HashSet<_>>();
+        let mut pruned_for_age_count = 0usize;
+        let mut pruned_for_file_count = 0usize;
+        let mut pruned_for_storage_count = 0usize;
+
+        for snapshot in all_snapshots.iter().rev() {
+            let snapshot_timestamp = parse_rfc3339(&snapshot.timestamp)?.to_offset(UtcOffset::UTC);
+
+            if snapshot_timestamp < cutoff
+                && !protected_snapshot_ids.contains(&snapshot.id)
+                && kept_snapshot_ids.remove(&snapshot.id)
+            {
+                pruned_for_age_count += 1;
+            }
+        }
+
+        let mut snapshots_by_path = BTreeMap::<PathBuf, Vec<&SnapshotRecord>>::new();
+
+        for snapshot in &all_snapshots {
+            if kept_snapshot_ids.contains(&snapshot.id) {
+                snapshots_by_path
+                    .entry(snapshot.relative_path.clone())
+                    .or_default()
+                    .push(snapshot);
+            }
+        }
+
+        for snapshots in snapshots_by_path.values() {
+            let mut kept_for_path = 0usize;
+
+            for snapshot in snapshots {
+                if !kept_snapshot_ids.contains(&snapshot.id) {
+                    continue;
+                }
+
+                kept_for_path += 1;
+
+                if kept_for_path <= policy.max_snapshots_per_file {
+                    continue;
+                }
+
+                if protected_snapshot_ids.contains(&snapshot.id) {
+                    continue;
+                }
+
+                if kept_snapshot_ids.remove(&snapshot.id) {
+                    pruned_for_file_count += 1;
+                }
+            }
+        }
+
+        let blob_sizes = self.all_blob_sizes()?;
+        let tracked_hashes = self.tracked_blob_hashes()?;
+        let mut blob_stats = build_blob_reference_stats(
+            &all_snapshots,
+            &kept_snapshot_ids,
+            &tracked_hashes,
+            &blob_sizes,
+        );
+
+        if blob_stats.total_bytes > policy.max_project_storage_bytes {
+            for snapshot in all_snapshots.iter().rev() {
+                if !kept_snapshot_ids.contains(&snapshot.id)
+                    || protected_snapshot_ids.contains(&snapshot.id)
+                {
+                    continue;
+                }
+
+                kept_snapshot_ids.remove(&snapshot.id);
+                decrement_blob_reference(
+                    &mut blob_stats,
+                    &snapshot.blob_hash,
+                    blob_sizes.get(&snapshot.blob_hash).copied().unwrap_or(0),
+                );
+                pruned_for_storage_count += 1;
+
+                if blob_stats.total_bytes <= policy.max_project_storage_bytes {
+                    break;
+                }
+            }
+        }
+
+        let deleted_snapshots = all_snapshots
+            .iter()
+            .filter(|snapshot| !kept_snapshot_ids.contains(&snapshot.id))
+            .map(|snapshot| snapshot.id.clone())
+            .collect::<Vec<_>>();
+
+        for snapshot_id in &deleted_snapshots {
+            self.connection.execute(
+                "DELETE FROM snapshots WHERE id = ?1",
+                params![snapshot_id.as_str()],
+            )?;
+        }
+
+        let (deleted_blob_count, deleted_blob_bytes) = self.delete_orphaned_blobs()?;
+        self.rebuild_markdown_view(&format_timestamp(pruned_at)?)?;
+        let remaining_snapshot_count = self.snapshot_count()?;
+        let remaining_referenced_blob_bytes = self.current_referenced_blob_bytes()?;
+
+        Ok(PruneReport {
+            pruned_at: format_timestamp(pruned_at)?,
+            deleted_restore_operation_count,
+            deleted_snapshot_count: deleted_snapshots.len(),
+            deleted_blob_count,
+            deleted_blob_bytes,
+            remaining_snapshot_count,
+            remaining_referenced_blob_bytes,
+            protected_snapshot_count,
+            pruned_for_age_count,
+            pruned_for_file_count,
+            pruned_for_storage_count,
+            rebuilt_markdown_view: true,
+        })
+    }
+
     pub fn render_hour_markdown(
         &self,
         hour: &str,
@@ -459,6 +602,16 @@ impl LocalHistoryStore {
         &self,
         request: SnapshotWriteRequest,
     ) -> Result<SnapshotRecord, StorageError> {
+        let policy = self.retention_policy();
+        let size_bytes = request.contents.len() as u64;
+
+        if size_bytes > policy.max_file_size_bytes {
+            return Err(StorageError::SnapshotTooLarge {
+                size_bytes,
+                max_bytes: policy.max_file_size_bytes,
+            });
+        }
+
         let relative_path = normalize_relative_path(&request.relative_path)?;
         let blob = self.store_blob(&request.contents)?;
         let snapshot = SnapshotRecord {
@@ -472,7 +625,7 @@ impl LocalHistoryStore {
             project_id: self.project.id.clone(),
             relative_path: relative_path.clone(),
             blob_hash: blob.hash.clone(),
-            size_bytes: request.contents.len() as u64,
+            size_bytes,
             timestamp: request.timestamp,
             kind: request.kind,
             captures_missing_file: request.captures_missing_file,
@@ -1304,6 +1457,250 @@ impl LocalHistoryStore {
             .optional()
             .map_err(StorageError::from)
     }
+
+    fn all_snapshots_newest_first(&self) -> Result<Vec<SnapshotRecord>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, project_id, relative_path, blob_hash, size_bytes, timestamp, kind,
+                    captures_missing_file
+             FROM snapshots
+             WHERE project_id = ?1
+             ORDER BY unixepoch(timestamp) DESC, id DESC",
+        )?;
+        let rows = statement.query_map(params![self.project.id.as_str()], snapshot_row_mapper)?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
+    }
+
+    fn prune_restore_operations(
+        &self,
+        latest_operation: Option<&RestoreOperationRecord>,
+    ) -> Result<usize, StorageError> {
+        let deleted = if let Some(latest_operation) = latest_operation {
+            self.connection.execute(
+                "DELETE FROM restore_operations
+                 WHERE project_id = ?1 AND id <> ?2",
+                params![self.project.id.as_str(), latest_operation.id.as_str()],
+            )?
+        } else {
+            self.connection.execute(
+                "DELETE FROM restore_operations WHERE project_id = ?1",
+                params![self.project.id.as_str()],
+            )?
+        };
+
+        Ok(deleted)
+    }
+
+    fn tracked_blob_hashes(&self) -> Result<HashSet<ContentHash>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT current_content_hash
+             FROM tracked_files
+             WHERE project_id = ?1",
+        )?;
+        let rows = statement.query_map(params![self.project.id.as_str()], |row| {
+            Ok(ContentHash::new(row.get::<_, String>(0)?))
+        })?;
+        let mut hashes = HashSet::new();
+
+        for row in rows {
+            hashes.insert(row?);
+        }
+
+        Ok(hashes)
+    }
+
+    fn all_blob_sizes(&self) -> Result<HashMap<ContentHash, u64>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT content_hash, size_bytes
+             FROM content_blobs",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                ContentHash::new(row.get::<_, String>(0)?),
+                row.get::<_, i64>(1)? as u64,
+            ))
+        })?;
+        let mut sizes = HashMap::new();
+
+        for row in rows {
+            let (hash, size_bytes) = row?;
+            sizes.insert(hash, size_bytes);
+        }
+
+        Ok(sizes)
+    }
+
+    fn snapshot_count(&self) -> Result<usize, StorageError> {
+        self.connection
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM snapshots
+                 WHERE project_id = ?1",
+                params![self.project.id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count as usize)
+            .map_err(StorageError::from)
+    }
+
+    fn current_referenced_blob_bytes(&self) -> Result<u64, StorageError> {
+        let blob_sizes = self.all_blob_sizes()?;
+        let tracked_hashes = self.tracked_blob_hashes()?;
+        let snapshots = self.all_snapshots_newest_first()?;
+        let kept_snapshot_ids = snapshots
+            .iter()
+            .map(|snapshot| snapshot.id.clone())
+            .collect::<HashSet<_>>();
+
+        Ok(
+            build_blob_reference_stats(
+                &snapshots,
+                &kept_snapshot_ids,
+                &tracked_hashes,
+                &blob_sizes,
+            )
+            .total_bytes,
+        )
+    }
+
+    fn delete_orphaned_blobs(&self) -> Result<(usize, u64), StorageError> {
+        let referenced_hashes = self.referenced_blob_hashes()?;
+        let mut statement = self.connection.prepare(
+            "SELECT content_hash, size_bytes, compression, storage_path
+             FROM content_blobs",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let compression: String = row.get(2)?;
+
+            Ok(ContentBlobRecord {
+                hash: ContentHash::new(row.get::<_, String>(0)?),
+                size_bytes: row.get::<_, i64>(1)? as u64,
+                compression: CompressionKind::from_db_value(&compression),
+                storage_path: PathBuf::from(row.get::<_, String>(3)?),
+            })
+        })?;
+        let mut deleted_blob_count = 0usize;
+        let mut deleted_blob_bytes = 0u64;
+
+        for row in rows {
+            let blob = row?;
+
+            if referenced_hashes.contains(&blob.hash) {
+                continue;
+            }
+
+            let absolute_path = self.layout.project_dir.join(&blob.storage_path);
+
+            if absolute_path.exists() {
+                fs::remove_file(&absolute_path)?;
+
+                if let Some(parent) = absolute_path.parent() {
+                    remove_directory_if_empty(parent)?;
+                }
+            }
+
+            self.connection.execute(
+                "DELETE FROM content_blobs WHERE content_hash = ?1",
+                params![blob.hash.as_str()],
+            )?;
+            deleted_blob_count += 1;
+            deleted_blob_bytes += blob.size_bytes;
+        }
+
+        Ok((deleted_blob_count, deleted_blob_bytes))
+    }
+
+    fn referenced_blob_hashes(&self) -> Result<HashSet<ContentHash>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT blob_hash
+             FROM snapshots
+             WHERE project_id = ?1",
+        )?;
+        let rows = statement.query_map(params![self.project.id.as_str()], |row| {
+            Ok(ContentHash::new(row.get::<_, String>(0)?))
+        })?;
+        let mut hashes = self.tracked_blob_hashes()?;
+
+        for row in rows {
+            hashes.insert(row?);
+        }
+
+        Ok(hashes)
+    }
+}
+
+fn build_blob_reference_stats(
+    snapshots: &[SnapshotRecord],
+    kept_snapshot_ids: &HashSet<SnapshotId>,
+    tracked_hashes: &HashSet<ContentHash>,
+    blob_sizes: &HashMap<ContentHash, u64>,
+) -> BlobReferenceStats {
+    let mut ref_counts = HashMap::<ContentHash, usize>::new();
+    let mut total_bytes = 0u64;
+
+    for content_hash in tracked_hashes {
+        increment_blob_reference(&mut ref_counts, &mut total_bytes, content_hash, blob_sizes);
+    }
+
+    for snapshot in snapshots {
+        if kept_snapshot_ids.contains(&snapshot.id) {
+            increment_blob_reference(
+                &mut ref_counts,
+                &mut total_bytes,
+                &snapshot.blob_hash,
+                blob_sizes,
+            );
+        }
+    }
+
+    BlobReferenceStats {
+        ref_counts,
+        total_bytes,
+    }
+}
+
+fn protected_snapshot_ids_for_prune(
+    latest_operation: Option<&RestoreOperationRecord>,
+) -> HashSet<SnapshotId> {
+    let mut ids = HashSet::new();
+
+    if let Some(latest_operation) = latest_operation {
+        ids.insert(latest_operation.restored_snapshot_id.clone());
+        ids.insert(latest_operation.safety_snapshot_id.clone());
+    }
+
+    ids
+}
+
+fn increment_blob_reference(
+    ref_counts: &mut HashMap<ContentHash, usize>,
+    total_bytes: &mut u64,
+    content_hash: &ContentHash,
+    blob_sizes: &HashMap<ContentHash, u64>,
+) {
+    let entry = ref_counts.entry(content_hash.clone()).or_default();
+
+    if *entry == 0 {
+        *total_bytes += blob_sizes.get(content_hash).copied().unwrap_or(0);
+    }
+
+    *entry += 1;
+}
+
+fn decrement_blob_reference(
+    stats: &mut BlobReferenceStats,
+    content_hash: &ContentHash,
+    size_bytes: u64,
+) {
+    if let Some(count) = stats.ref_counts.get_mut(content_hash) {
+        *count = count.saturating_sub(1);
+
+        if *count == 0 {
+            stats.ref_counts.remove(content_hash);
+            stats.total_bytes = stats.total_bytes.saturating_sub(size_bytes);
+        }
+    }
 }
 
 fn normalize_relative_path(path: &Path) -> Result<PathBuf, StorageError> {
@@ -1580,6 +1977,14 @@ fn clear_directory_if_exists(path: &Path) -> Result<(), StorageError> {
     Ok(())
 }
 
+fn remove_directory_if_empty(path: &Path) -> Result<(), StorageError> {
+    if path.is_dir() && fs::read_dir(path)?.next().is_none() {
+        fs::remove_dir(path)?;
+    }
+
+    Ok(())
+}
+
 fn relative_path_from_hour_dir(from_path: &Path, to_path: &Path) -> Result<PathBuf, StorageError> {
     let base = from_path
         .parent()
@@ -1701,7 +2106,7 @@ fn restore_operation_row_mapper(
 #[cfg(test)]
 mod tests {
     use super::{LocalHistoryStore, SnapshotQuery, SnapshotWriteRequest, StorageError, SCHEMA_SQL};
-    use crate::{SnapshotId, SnapshotKind};
+    use crate::{RetentionPolicy, SnapshotId, SnapshotKind};
     use rusqlite::params;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -2422,6 +2827,286 @@ mod tests {
             located.project().root,
             super::normalize_project_root(&project_root)
         );
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn rejects_snapshot_larger_than_retention_limit() {
+        let (base_dir, project_root) = create_test_roots("large-file");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+        let oversized = vec![b'x'; (RetentionPolicy::default().max_file_size_bytes + 1) as usize];
+
+        let error = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/huge.bin"),
+                contents: oversized,
+                timestamp: "2026-05-03T09:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: true,
+                captures_missing_file: false,
+            })
+            .expect_err("oversized snapshot must fail");
+
+        assert!(matches!(error, StorageError::SnapshotTooLarge { .. }));
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn prune_drops_oldest_snapshots_per_file_and_rebuilds_view() {
+        let (base_dir, project_root) = create_test_roots("prune-count");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+
+        let oldest = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/count.rs"),
+                contents: b"oldest".to_vec(),
+                timestamp: "2026-05-01T10:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("oldest snapshot must store");
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/count.rs"),
+                contents: b"middle".to_vec(),
+                timestamp: "2026-05-02T10:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("middle snapshot must store");
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/count.rs"),
+                contents: b"newest".to_vec(),
+                timestamp: "2026-05-03T10:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("newest snapshot must store");
+
+        let report = store
+            .prune(
+                &RetentionPolicy {
+                    max_snapshots_per_file: 2,
+                    max_project_storage_bytes: u64::MAX,
+                    max_file_size_bytes: RetentionPolicy::default().max_file_size_bytes,
+                    max_snapshot_age_days: u16::MAX,
+                },
+                "2026-05-03T10:05:00Z",
+            )
+            .expect("prune must succeed");
+        let remaining = store
+            .recent_raw_snapshots(10)
+            .expect("remaining snapshots must load");
+
+        assert_eq!(report.deleted_snapshot_count, 1);
+        assert_eq!(report.pruned_for_file_count, 1);
+        assert_eq!(report.remaining_snapshot_count, 2);
+        assert_eq!(report.deleted_blob_count, 1);
+        assert!(store
+            .snapshot(&oldest.id)
+            .expect("lookup must work")
+            .is_none());
+        assert!(store.layout().view_dir.join("README.md").exists());
+        assert_eq!(remaining.len(), 2);
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn prune_respects_restore_referenced_snapshots() {
+        let (base_dir, project_root) = create_test_roots("prune-protected");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+        let snapshot = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/protected.txt"),
+                contents: b"restore target".to_vec(),
+                timestamp: "2026-05-02T14:20:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("snapshot must store");
+        let live_path = store.project().root.join("src/protected.txt");
+
+        fs::create_dir_all(live_path.parent().expect("parent must exist"))
+            .expect("parent dir must exist");
+        fs::write(&live_path, b"current state").expect("live file must exist");
+        store
+            .restore_snapshot(&snapshot.id, "2026-05-02T14:21:00Z")
+            .expect("restore must succeed");
+
+        let report = store
+            .prune(
+                &RetentionPolicy {
+                    max_snapshots_per_file: 0,
+                    max_project_storage_bytes: u64::MAX,
+                    max_file_size_bytes: RetentionPolicy::default().max_file_size_bytes,
+                    max_snapshot_age_days: u16::MAX,
+                },
+                "2026-05-03T10:00:00Z",
+            )
+            .expect("prune must succeed");
+
+        assert_eq!(report.protected_snapshot_count, 2);
+        assert_eq!(report.remaining_snapshot_count, 2);
+        assert_eq!(report.deleted_snapshot_count, 0);
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn prune_drops_stale_restore_operations_and_only_keeps_latest_chain() {
+        let (base_dir, project_root) = create_test_roots("prune-restore-chain");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+        let live_path = store.project().root.join("src/chain.txt");
+
+        fs::create_dir_all(live_path.parent().expect("parent must exist"))
+            .expect("parent dir must exist");
+
+        let first_target = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/chain.txt"),
+                contents: b"first-target".to_vec(),
+                timestamp: "2026-05-01T10:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("first target snapshot must store");
+        fs::write(&live_path, b"live-before-first").expect("live file must exist");
+        let first_restore = store
+            .restore_snapshot(&first_target.id, "2026-05-01T10:10:00Z")
+            .expect("first restore must succeed");
+
+        let second_target = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/chain.txt"),
+                contents: b"second-target".to_vec(),
+                timestamp: "2026-05-02T10:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("second target snapshot must store");
+        fs::write(&live_path, b"live-before-second").expect("live file must update");
+        let second_restore = store
+            .restore_snapshot(&second_target.id, "2026-05-02T10:10:00Z")
+            .expect("second restore must succeed");
+
+        let report = store
+            .prune(
+                &RetentionPolicy {
+                    max_snapshots_per_file: 0,
+                    max_project_storage_bytes: u64::MAX,
+                    max_file_size_bytes: RetentionPolicy::default().max_file_size_bytes,
+                    max_snapshot_age_days: u16::MAX,
+                },
+                "2026-05-03T10:00:00Z",
+            )
+            .expect("prune must succeed");
+        let latest_operation = store
+            .latest_restore_operation()
+            .expect("latest restore operation lookup must succeed")
+            .expect("latest restore operation must remain");
+        let restore_operation_count: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM restore_operations", [], |row| {
+                row.get(0)
+            })
+            .expect("restore operation count query must work");
+
+        assert_eq!(report.deleted_restore_operation_count, 1);
+        assert_eq!(report.protected_snapshot_count, 2);
+        assert_eq!(restore_operation_count, 1);
+        assert_eq!(latest_operation.id, second_restore.operation.id);
+        assert!(
+            store
+                .snapshot(&first_target.id)
+                .expect("lookup must work")
+                .is_none(),
+            "older restored snapshot should no longer be pinned"
+        );
+        assert!(
+            store
+                .snapshot(&first_restore.safety_snapshot.id)
+                .expect("lookup must work")
+                .is_none(),
+            "older safety snapshot should no longer be pinned"
+        );
+        assert!(
+            store
+                .snapshot(&second_target.id)
+                .expect("lookup must work")
+                .is_some(),
+            "latest restored snapshot must stay available for undo"
+        );
+        assert!(
+            store
+                .snapshot(&second_restore.safety_snapshot.id)
+                .expect("lookup must work")
+                .is_some(),
+            "latest safety snapshot must stay available for undo"
+        );
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn prune_reduces_estimated_storage_to_budget() {
+        let (base_dir, project_root) = create_test_roots("prune-storage");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/history.txt"),
+                contents: b"alpha-storage".to_vec(),
+                timestamp: "2026-05-01T10:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("first snapshot must store");
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/history.txt"),
+                contents: b"beta-storage!".to_vec(),
+                timestamp: "2026-05-02T10:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("second snapshot must store");
+        store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/history.txt"),
+                contents: b"gamma-storage".to_vec(),
+                timestamp: "2026-05-03T10:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("third snapshot must store");
+
+        let report = store
+            .prune(
+                &RetentionPolicy {
+                    max_snapshots_per_file: usize::MAX,
+                    max_project_storage_bytes: 20,
+                    max_file_size_bytes: RetentionPolicy::default().max_file_size_bytes,
+                    max_snapshot_age_days: u16::MAX,
+                },
+                "2026-05-03T10:05:00Z",
+            )
+            .expect("prune must succeed");
+
+        assert!(report.pruned_for_storage_count >= 1);
+        assert!(report.remaining_referenced_blob_bytes <= 20);
 
         cleanup_test_roots(&base_dir);
     }

@@ -28,4 +28,7 @@ pub enum StorageError {
 
     #[error("invalid time window: {0}")]
     InvalidTimeWindow(String),
+
+    #[error("snapshot size {size_bytes} bytes exceeds retention limit of {max_bytes} bytes")]
+    SnapshotTooLarge { size_bytes: u64, max_bytes: u64 },
 }
