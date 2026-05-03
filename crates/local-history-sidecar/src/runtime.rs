@@ -713,6 +713,65 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_project_state_skips_unchanged_contents() {
+        let root = create_test_root("unchanged");
+        let base_dir = root.join("data");
+        let project_root = root.join("project");
+
+        fs::create_dir_all(&base_dir).expect("base dir must exist");
+        fs::create_dir_all(&project_root).expect("project dir must exist");
+
+        let store = LocalHistoryStore::open(&base_dir, &project_root).expect("store must open");
+        let previous = state_with_file("src/lib.rs", b"same");
+        let current = state_with_file("src/lib.rs", b"same");
+
+        reconcile_project_state(&store, &previous, &current).expect("reconcile must succeed");
+
+        let snapshots = store
+            .recent_raw_snapshots(10)
+            .expect("snapshot query must succeed");
+        assert!(snapshots.is_empty());
+
+        cleanup_test_project(&root);
+    }
+
+    #[test]
+    fn reconcile_project_state_handles_atomic_replace_save_pattern() {
+        let root = create_test_root("atomic-replace");
+        let base_dir = root.join("data");
+        let project_root = root.join("project");
+        let source_dir = project_root.join("src");
+        let live_path = source_dir.join("atomic.txt");
+        let temp_path = source_dir.join(".atomic.txt.tmp");
+
+        fs::create_dir_all(&base_dir).expect("base dir must exist");
+        fs::create_dir_all(&source_dir).expect("source dir must exist");
+        fs::write(&live_path, b"before").expect("live file must exist");
+
+        let store = LocalHistoryStore::open(&base_dir, &project_root).expect("store must open");
+        let previous = scan_project(&project_root).expect("initial scan must succeed");
+
+        fs::write(&temp_path, b"after").expect("temp file must exist");
+        fs::rename(&temp_path, &live_path).expect("temp file must atomically replace live file");
+
+        let current = scan_project(&project_root).expect("updated scan must succeed");
+        reconcile_project_state(&store, &previous, &current).expect("reconcile must succeed");
+
+        let snapshots = store
+            .recent_raw_snapshots(10)
+            .expect("snapshot query must succeed");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            store
+                .read_snapshot_content(&snapshots[0].id)
+                .expect("snapshot contents must exist"),
+            b"before"
+        );
+
+        cleanup_test_project(&root);
+    }
+
+    #[test]
     fn status_freshness_uses_recent_heartbeat() {
         let record = WatcherStatusRecord {
             project_root: PathBuf::from("/tmp/project"),

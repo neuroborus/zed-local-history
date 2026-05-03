@@ -1140,66 +1140,66 @@ Because the sidecar is editor-independent, support can be added for:
 
 ## Core
 
-- [ ] Project identity is stable.
-- [ ] Snapshot storage is content-addressed.
-- [ ] SQLite metadata is persisted.
-- [ ] Blobs are compressed.
-- [ ] Ignored files are skipped.
-- [ ] Large files are skipped or handled safely.
+- [x] Project identity is stable.
+- [x] Snapshot storage is content-addressed.
+- [x] SQLite metadata is persisted.
+- [x] Blobs are compressed.
+- [x] Ignored files are skipped.
+- [x] Large files are skipped or handled safely.
 
 ## Watcher
 
-- [ ] Initial scan works.
-- [ ] Save/change detection works.
-- [ ] Atomic writes are handled.
-- [ ] Duplicate events are debounced.
-- [ ] Delete snapshots are recoverable.
-- [ ] Daemon status is available.
+- [x] Initial scan works.
+- [x] Save/change detection works.
+- [x] Atomic writes are handled.
+- [x] Duplicate events are debounced.
+- [x] Delete snapshots are recoverable.
+- [x] Daemon status is available.
 
 ## CLI
 
-- [ ] `recent --limit 10` works.
-- [ ] Recent list is numbered.
-- [ ] Restore by snapshot ID works.
-- [ ] Restore by recent-list number works.
-- [ ] Pagination works.
-- [ ] Filters by file/time work.
-- [ ] Basic interactive browse mode works.
-- [ ] JSON output is available for query commands.
+- [x] `recent --limit 10` works.
+- [x] Recent list is numbered.
+- [x] Restore by snapshot ID works.
+- [x] Restore by recent-list number works.
+- [x] Pagination works.
+- [x] Filters by file/time work.
+- [x] Basic interactive browse mode works.
+- [x] JSON output is available for query commands.
 
 ## Restore Safety
 
-- [ ] Safety snapshot is created before every restore.
-- [ ] Restore operation is recorded.
-- [ ] Undo restore works.
-- [ ] Safety snapshots are visible through CLI.
-- [ ] Restore never silently destroys current state.
+- [x] Safety snapshot is created before every restore.
+- [x] Restore operation is recorded.
+- [x] Undo restore works.
+- [x] Safety snapshots are visible through CLI.
+- [x] Restore never silently destroys current state.
 
 ## Markdown
 
-- [ ] Hour report generation works.
-- [ ] 10-minute segment report generation works.
-- [ ] Filesystem-browsable Markdown view exists.
-- [ ] Exact snapshot Markdown files exist.
-- [ ] Markdown view can be rebuilt.
-- [ ] Markdown generation does not trigger recursive snapshots.
+- [x] Hour report generation works.
+- [x] 10-minute segment report generation works.
+- [x] Filesystem-browsable Markdown view exists.
+- [x] Exact snapshot Markdown files exist.
+- [x] Markdown view can be rebuilt.
+- [x] Markdown generation does not trigger recursive snapshots.
 
 ## Zed Extension
 
-- [ ] Extension can install/download sidecar.
-- [ ] Extension can start sidecar.
-- [ ] Extension can show status.
-- [ ] Extension can open generated Markdown.
-- [ ] Extension can request restore by snapshot ID.
-- [ ] Clear errors are shown when capabilities are missing.
+- [x] Extension can install/download sidecar.
+- [x] Extension can start sidecar.
+- [x] Extension can show status.
+- [x] Extension can open or reveal generated Markdown in the currently supported API shape.
+- [x] Extension can request restore by snapshot ID.
+- [x] Clear errors are shown when capabilities are missing.
 
 ## Release
 
-- [ ] CI passes.
-- [ ] Release artifacts are built.
-- [ ] Checksums are generated.
-- [ ] Platform compatibility is documented.
-- [ ] Installation flow is documented.
+- [x] CI passes.
+- [ ] Release artifacts are built on a real tagged run.
+- [ ] Checksums are generated and verified on a real tagged run.
+- [x] Platform compatibility is documented.
+- [x] Installation flow is documented.
 
 ---
 
