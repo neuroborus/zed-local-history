@@ -75,6 +75,7 @@ jobs:
           mkdir -p dist
           cp target/release/local-history${{ matrix.binary_suffix }} dist/
           cp target/release/local-history-sidecar${{ matrix.binary_suffix }} dist/
+          cp target/release/local-history-mcp${{ matrix.binary_suffix }} dist/
           cp README.md LICENSE dist/
 
       - name: Package release bundle (Unix)
@@ -82,7 +83,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p package/${{ matrix.artifact_name }}
-          cp dist/local-history dist/local-history-sidecar dist/README.md dist/LICENSE package/${{ matrix.artifact_name }}/
+          cp dist/local-history dist/local-history-sidecar dist/local-history-mcp dist/README.md dist/LICENSE package/${{ matrix.artifact_name }}/
           tar -czf dist/${{ matrix.release_archive_name }} -C package ${{ matrix.artifact_name }}
 
       - name: Package release bundle (Windows)
@@ -92,6 +93,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "package/${{ matrix.artifact_name }}" | Out-Null
           Copy-Item "dist/local-history.exe" "package/${{ matrix.artifact_name }}/local-history.exe"
           Copy-Item "dist/local-history-sidecar.exe" "package/${{ matrix.artifact_name }}/local-history-sidecar.exe"
+          Copy-Item "dist/local-history-mcp.exe" "package/${{ matrix.artifact_name }}/local-history-mcp.exe"
           Copy-Item "dist/README.md" "package/${{ matrix.artifact_name }}/README.md"
           Copy-Item "dist/LICENSE" "package/${{ matrix.artifact_name }}/LICENSE"
           Compress-Archive -Path "package/${{ matrix.artifact_name }}" -DestinationPath "dist/${{ matrix.release_archive_name }}" -Force

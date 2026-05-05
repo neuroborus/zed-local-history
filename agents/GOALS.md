@@ -234,7 +234,7 @@ The CLI is not secondary. It is the reliable interface for:
 
 ### 5.4 `local-history-mcp`
 
-Optional MCP server adapter for agent clients.
+MCP server adapter for agent clients.
 
 Responsibilities:
 
@@ -243,14 +243,18 @@ Responsibilities:
 - keep destructive actions such as restore safety-first;
 - return stable, agent-friendly structured output for recent snapshots, snapshot view, status, and restore flows.
 
-Suggested tool surface:
+Initial implemented tool surface:
 
 - `local_history_status`
 - `local_history_create_snapshot`
 - `local_history_recent_snapshots`
-- `local_history_diff_snapshot`
-- `local_history_restore_snapshot`
 - `local_history_view_snapshot`
+- `local_history_restore_snapshot`
+- `local_history_prune`
+
+Future MCP expansion once dedicated product surfaces exist:
+
+- `local_history_diff_snapshot`
 
 If this crate is added, it must not become a second home for storage or restore business logic. It is an adapter layer.
 

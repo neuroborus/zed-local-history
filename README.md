@@ -1,156 +1,482 @@
 # zed-local-history
 
-Pragmatic repository scaffold for a filesystem-first local-history tool for Zed.
+Filesystem-first local history for Zed.
 
-This repository is set up around the product direction captured in [agents/GOALS.md](./agents/GOALS.md) and [agents/DEVELOPMENT_PLAN.md](./agents/DEVELOPMENT_PLAN.md):
+This project stores previous saved states of files outside the user repository, exposes them through a native CLI, a native sidecar watcher, generated Markdown history views, a thin Zed extension, and an additive MCP stdio server. The recovery path does not depend on Git, stash, or a custom editor UI.
 
-- native Rust sidecar as the source of truth;
-- CLI and Markdown as the dependable recovery interface;
-- thin Zed integration instead of a custom editor UI dependency;
-- clean monorepo layout that can grow without structural churn.
+## What it does
 
-The documented architecture also leaves room for an MCP server surface for Zed Agent workflows, but that remains separate from the current MVP path.
+- watches a project and stores the previous on-disk state of a file when that file changes or is deleted;
+- keeps snapshot metadata in SQLite and stores snapshot contents as compressed content-addressed blobs;
+- groups raw snapshots by hour and fixed 10-minute windows;
+- generates filesystem-browsable Markdown history under an external `view/` directory;
+- restores an exact snapshot by ID or by recent-list number;
+- always creates a safety snapshot before restore;
+- can undo the last restore;
+- prunes old or excess history while preserving the latest restore/undo chain needed for recovery;
+- integrates with Zed through slash commands and sidecar bootstrap;
+- exposes MCP tools for agent clients such as the Zed Agent Panel.
 
-The repository now has a real storage-backed recovery path for manual CLI snapshots and safe restore flows, a polling-based sidecar watcher with `watch`, `ensure-daemon`, and `status`, generated Markdown history views for hour/segment browsing, and a real Zed slash-command integration layer with sidecar bootstrap. The extension now resolves `local-history-sidecar` from `PATH` for dev workflows, otherwise falls back to a cached/downloaded GitHub release asset for supported platforms, verifies sidecar version compatibility before use, and can trigger both hour and fixed 10-minute segment Markdown renders.
+## Current surfaces
 
-## What is here
+- `local-history`
+  User-facing CLI for snapshotting, browsing, restore, undo, Markdown generation, and pruning.
+- `local-history-sidecar`
+  Native daemon/process boundary for watcher startup, watcher status, restore, and Markdown render commands used by Zed.
+- `editors/zed`
+  Thin Zed extension package that resolves or downloads the sidecar and exposes focused slash commands.
+- `local-history-mcp`
+  MCP stdio server for agent-facing tool calls.
 
-- `agents/` keeps the project goals, roadmap, agent agreements, and supporting notes together.
-- `crates/local-history-core` is the editor-agnostic place for storage/layout/domain logic.
-- `crates/local-history-cli` is the user-facing command surface.
-- `crates/local-history-sidecar` is the native daemon/process boundary.
-- `editors/zed` is a dedicated Zed extension package, kept outside the root workspace on purpose.
-- `xtask` provides one-command local checks for the Rust workspace, the Zed extension package, and the combined repository path.
-- `RHYTHM.md` records meaningful repository decisions in newest-first order.
+## How it works
 
-Documented, but not implemented yet:
+1. The sidecar scans a project root and keeps an in-memory view of tracked files.
+2. When a file changes, the sidecar stores the previous known contents as a raw snapshot.
+3. When a file is deleted, the sidecar stores the previous known contents before dropping that file from the cache.
+4. Restore writes the chosen snapshot back to the live file only after creating a safety snapshot of the current state.
+5. Markdown generation reads from stored raw snapshots and writes history pages into external storage. Generated Markdown is not the source of truth.
+6. The MCP server maps tool calls onto the same storage and restore paths instead of becoming a second source of business logic.
 
-- `local-history-mcp` as a thin MCP adapter for agent-facing tool calls.
+## Requirements
 
-## Quickstart
+### Native workspace
 
-Run the workspace checks:
+- Rust `1.75.0` for the root workspace
+- `cargo`, `rustfmt`, and `clippy`
+
+### Zed extension package
+
+- Rust installed through `rustup`
+- a newer toolchain for `wasm32-wasip2`
+- the extension keeps its own toolchain in `editors/zed/rust-toolchain.toml`
+
+## Build and validation
+
+Run native workspace checks:
 
 ```bash
 cargo run -p xtask -- ci
 ```
 
-Run the full repository checks, including `editors/zed`:
+Run Zed extension checks:
+
+```bash
+cargo run -p xtask -- zed-ci
+```
+
+Run the full repository checks:
 
 ```bash
 cargo run -p xtask -- full-ci
 ```
 
-Try the CLI recovery surfaces:
+## Quick start
+
+Start the watcher for the current project:
+
+```bash
+cargo run -p local-history-sidecar -- ensure-daemon .
+```
+
+Check watcher and storage status:
+
+```bash
+cargo run -p local-history-sidecar -- status .
+```
+
+Create a manual snapshot of one file:
 
 ```bash
 cargo run -p local-history-cli -- snapshot . --file README.md
-cargo run -p local-history-cli -- recent .
-cargo run -p local-history-cli -- recent . --json
-cargo run -p local-history-cli -- list . --page 2 --page-size 20
-cargo run -p local-history-cli -- list . --file README.md --from 2026-05-02T14:00:00Z --to 2026-05-02T15:00:00Z --json
-cargo run -p local-history-cli -- history hour . --hour 2026-05-02T14
-cargo run -p local-history-cli -- history segment . --from 2026-05-02T14:10:00Z --to 2026-05-02T14:20:00Z --json
-cargo run -p local-history-cli -- view-root .
-cargo run -p local-history-cli -- render-markdown hour . --hour 2026-05-02T14
-cargo run -p local-history-cli -- render-markdown segment . --from 2026-05-02T14:10:00Z --to 2026-05-02T14:20:00Z
-cargo run -p local-history-cli -- rebuild-markdown-view .
-cargo run -p local-history-cli -- prune .
-cargo run -p local-history-cli -- show <snapshot-id>
-cargo run -p local-history-cli -- restore <snapshot-id>
-cargo run -p local-history-cli -- restore --project-root . --recent 1
-cargo run -p local-history-cli -- safety-list .
-cargo run -p local-history-cli -- browse .
-cargo run -p local-history-cli -- undo-restore .
-cargo run -p local-history-cli -- restore-last-safety .
-cargo run -p local-history-sidecar -- health
-cargo run -p local-history-sidecar -- version
-cargo run -p local-history-sidecar -- status .
-cargo run -p local-history-sidecar -- ensure-daemon .
-cargo run -p local-history-sidecar -- render-markdown current-segment .
 ```
 
-Current CLI behavior:
+List the latest raw snapshots:
 
-- `recent` lists raw user snapshots only, so safety snapshots do not pollute normal restore numbering.
-- `list` adds paginated browsing with `--page` and `--page-size`.
+```bash
+cargo run -p local-history-cli -- recent .
+```
+
+Restore the newest raw snapshot from the recent list:
+
+```bash
+cargo run -p local-history-cli -- restore --project-root . --recent 1
+```
+
+Undo that restore:
+
+```bash
+cargo run -p local-history-cli -- undo-restore .
+```
+
+Generate the current hour Markdown view:
+
+```bash
+cargo run -p local-history-cli -- render-markdown hour . --hour 2026-05-03T14
+```
+
+Start the MCP stdio server:
+
+```bash
+cargo run -p local-history-mcp
+```
+
+## Common workflows
+
+### 1. Watch a project continuously
+
+Start or verify the watcher:
+
+```bash
+cargo run -p local-history-sidecar -- ensure-daemon /absolute/path/to/project
+```
+
+Read status:
+
+```bash
+cargo run -p local-history-sidecar -- status /absolute/path/to/project
+```
+
+Current watcher behavior:
+
+- initial scan builds state without snapshotting every file immediately;
+- only saved on-disk changes are captured;
+- polling is used instead of OS-native event subscriptions;
+- unchanged contents do not create duplicate snapshots;
+- atomic replace save patterns are handled;
+- files larger than the snapshot size cap are skipped instead of repeatedly failing the watcher loop.
+
+### 2. Capture a manual snapshot
+
+Manual snapshots are useful for precise experiments or before risky edits:
+
+```bash
+cargo run -p local-history-cli -- snapshot . --file src/lib.rs
+```
+
+Manual snapshotting is exact and per-file. It does not create a project-wide checkpoint.
+
+### 3. Browse recent snapshots
+
+Basic recent list:
+
+```bash
+cargo run -p local-history-cli -- recent .
+```
+
+Recent list with JSON:
+
+```bash
+cargo run -p local-history-cli -- recent . --json
+```
+
+Paginated list with filters:
+
+```bash
+cargo run -p local-history-cli -- list . --page 1 --page-size 20 --file src/lib.rs --from 2026-05-03T10:00:00Z --to 2026-05-03T11:00:00Z
+```
+
+Important behavior:
+
+- `recent` shows raw user snapshots only;
+- safety snapshots are intentionally excluded from normal recent numbering;
+- `list` can include filtered or paginated snapshot views;
 - `recent`, `list`, `show`, `status`, and `safety-list` support `--json`.
-- `status` also exposes the default retention policy: `250` snapshots per file, `512 MiB` estimated project storage, `4 MiB` max snapshot file size, and `30` days max snapshot age.
-- `recent`, `list`, and `safety-list` support `--file`, `--from`, `--to`, and `--hour YYYY-MM-DDTHH`.
-- `browse` provides a minimal interactive recovery loop with next/previous navigation, snapshot preview, and restore confirmation.
-- `history hour` and `history segment` group raw snapshots into fixed 10-minute windows and list affected files with exact snapshot IDs preserved.
-- `render-markdown hour` generates a browsable hour directory with `README.md`, six fixed segment pages, and exact snapshot Markdown pages under `view/<date>/<hour>/`.
-- `render-markdown segment` validates a fixed 10-minute window and refreshes the parent hour view before returning the exact segment Markdown path.
-- `view-root` prints the Markdown view root; `rebuild-markdown-view` clears and rebuilds the full filesystem-browsable Markdown tree from raw snapshots.
-- `prune` applies the default retention policy, preserves only the latest restore/undo chain needed for current undo behavior, removes stale restore-operation rows and orphaned blobs, and rebuilds the Markdown view.
-- `restore` always creates a safety snapshot first, records a restore operation, and then applies the target snapshot.
-- `undo-restore` replays the latest safety snapshot for the project.
-- `restore-last-safety` is an explicit escape hatch to restore the newest safety snapshot directly.
-- `safety-list` shows the stored safety snapshots separately from normal history.
 
-Current sidecar behavior:
+### 4. Inspect one snapshot
 
-- `watch <project-root>` performs an initial scan, applies default ignore rules, and then polls for saved file changes.
-- when a tracked file changes, the sidecar stores the previous known state as a raw snapshot;
-- when a tracked file is deleted, the sidecar stores the previous known state before dropping it from the cache;
-- files larger than the current retention limit are skipped instead of repeatedly failing the watcher loop;
-- `ensure-daemon <project-root>` starts a background watcher if there is no fresh heartbeat;
-- `status <project-root>` reports watcher state from the sidecar heartbeat file.
+Show a stored snapshot:
 
-## Privacy, Storage, and Limits
+```bash
+cargo run -p local-history-cli -- show <snapshot-id>
+```
 
-Local history is stored outside the user repository:
+This resolves the owning project automatically from external storage.
 
-- macOS: `~/Library/Application Support/local-history`
-- Linux: `$XDG_DATA_HOME/local-history` or `~/.local/share/local-history`
-- Windows: `%LOCALAPPDATA%\\local-history`
+### 5. Restore safely
 
-Per project, the storage layout is:
+Restore by exact snapshot ID:
 
-- `projects/<project-id>/metadata.sqlite` for snapshot metadata and restore operations;
-- `projects/<project-id>/blobs/` for compressed snapshot contents;
-- `projects/<project-id>/view/` for generated Markdown history;
-- `projects/<project-id>/logs/` for watcher logs and heartbeat status.
+```bash
+cargo run -p local-history-cli -- restore <snapshot-id>
+```
 
-Current data-handling rules and limits:
+Restore by recent-list position:
 
-- any saved file that is not ignored can be snapshotted, including credentials embedded in normal source files;
-- built-in ignores currently skip `.git/`, `node_modules/`, `target/`, `dist/`, `build/`, `.next/`, `.cache/`, `coverage/`, `.env*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.sqlite`, `*.db`, and `*.log`;
-- the current max snapshot file size is `4 MiB`;
-- retention defaults keep at most `250` snapshots per file, cap referenced project storage at `512 MiB`, and prune snapshots older than `30` days;
-- the `IgnorePolicy` reserves `.local-history-ignore`, but custom project-local ignore parsing is not wired yet, so ignore behavior is built-in only today.
+```bash
+cargo run -p local-history-cli -- restore --project-root . --recent 1
+```
 
-Deletion and cleanup:
+What restore guarantees:
 
-- remove one project's history by deleting its `projects/<project-id>/` directory;
-- remove all history by deleting the whole `local-history` base directory;
-- run `cargo run -p local-history-cli -- prune <project-root>` to apply retention without deleting the entire project history.
+- a safety snapshot is always created first;
+- the restore operation is recorded;
+- the live file is rewritten only after the safety snapshot exists;
+- the latest restore can be undone.
 
-## Troubleshooting
+Inspect safety snapshots:
 
-- Sidecar not starting: run `cargo run -p local-history-sidecar -- status <project-root>` and inspect `projects/<project-id>/logs/watcher.log` plus `watcher-status.json`.
-- Extension capabilities disabled or bootstrap failing: use the CLI directly first. The current Zed integration is additive and recovery does not depend on slash commands.
-- Unsupported platform: the extension bootstrap currently targets macOS `x86_64` / `aarch64`, Linux `x86_64` / `aarch64`, and Windows `x86_64` / `aarch64`. Other platforms need a manual sidecar path or direct CLI usage.
-- Watcher not detecting changes: only saved on-disk changes are captured, built-in ignored paths are skipped, and the current watcher is polling-based rather than event-driven.
-- Storage too large: run `cargo run -p local-history-cli -- status <project-root>` to inspect retention settings, then run `cargo run -p local-history-cli -- prune <project-root>`.
-- Markdown not updating: rerun `cargo run -p local-history-cli -- rebuild-markdown-view <project-root>`. Markdown generation writes under external storage and does not snapshot itself recursively.
-- Restore failure: confirm the snapshot still exists with `show <snapshot-id>` or `recent <project-root>`. A previously generated Markdown link can outlive the snapshot it points to after pruning.
+```bash
+cargo run -p local-history-cli -- safety-list .
+```
 
-## Zed Extension Notes
+Undo the latest restore:
 
-The `editors/zed` package follows the current documented Zed extension shape:
+```bash
+cargo run -p local-history-cli -- undo-restore .
+```
 
-- Git repository with `extension.toml`;
-- Rust `cdylib` crate compiled to WebAssembly;
-- thin integration surface centered around slash commands today.
+Explicitly restore the newest safety snapshot:
 
-Zed also supports MCP servers for the Agent Panel, either through direct user `context_servers` settings or through extension-managed MCP server registration. The project docs treat that as an additive integration path, not as a replacement for CLI and Markdown recovery.
+```bash
+cargo run -p local-history-cli -- restore-last-safety .
+```
 
-The current extension no longer returns placeholder text. It resolves `local-history-sidecar` from `PATH` for dev installs, otherwise downloads and caches a matching GitHub release asset in the extension work directory, then calls real sidecar commands for status / watcher startup / hour rendering / segment rendering / restore. Before using a discovered binary, the extension probes `local-history-sidecar version` and requires a compatible sidecar version; an outdated `PATH` binary is ignored in favor of the bundled release path. Because the current extension API does not expose a direct "open arbitrary external file" action, the MVP path is to print or reveal the generated Markdown path in a usable way rather than pretending it can always be opened automatically.
+### 6. Use interactive browse mode
 
-Tagged GitHub releases now also publish `SHA256SUMS.txt` alongside platform archives and fixed-name sidecar assets. The current extension bootstrap contract now covers macOS `x86_64` / `aarch64`, Linux `x86_64` / `aarch64`, and Windows `x86_64` / `aarch64`.
+```bash
+cargo run -p local-history-cli -- browse .
+```
 
-Current Zed-facing commands now cover:
+Current browse behavior:
+
+- page through raw snapshots;
+- preview one snapshot by number;
+- confirm restore explicitly before applying it.
+
+### 7. Query grouped history
+
+Hour history:
+
+```bash
+cargo run -p local-history-cli -- history hour . --hour 2026-05-03T14
+```
+
+10-minute segment history:
+
+```bash
+cargo run -p local-history-cli -- history segment . --from 2026-05-03T14:10:00Z --to 2026-05-03T14:20:00Z
+```
+
+Grouping rules:
+
+- raw snapshots remain the exact restore targets;
+- grouping is additive, not lossy;
+- each hour is always divided into six fixed 10-minute windows.
+
+### 8. Generate Markdown history views
+
+Find the generated view root:
+
+```bash
+cargo run -p local-history-cli -- view-root .
+```
+
+Generate one hour:
+
+```bash
+cargo run -p local-history-cli -- render-markdown hour . --hour 2026-05-03T14
+```
+
+Generate one fixed 10-minute segment:
+
+```bash
+cargo run -p local-history-cli -- render-markdown segment . --from 2026-05-03T14:10:00Z --to 2026-05-03T14:20:00Z
+```
+
+Rebuild the entire Markdown tree:
+
+```bash
+cargo run -p local-history-cli -- rebuild-markdown-view .
+```
+
+Generated Markdown currently includes:
+
+- root `README.md` with hour links;
+- one `README.md` per hour;
+- six fixed segment pages per hour;
+- exact snapshot pages with metadata, restore command, and text preview when available.
+
+### 9. Prune history
+
+Apply retention rules:
+
+```bash
+cargo run -p local-history-cli -- prune .
+```
+
+Current default retention policy:
+
+- max `250` snapshots per file;
+- max `512 MiB` referenced project storage;
+- max `4 MiB` snapshot file size;
+- max `30` days snapshot age.
+
+Pruning also:
+
+- removes stale restore-operation rows;
+- deletes orphaned blobs;
+- rebuilds the Markdown view.
+
+## CLI command reference
+
+### Snapshot and restore
+
+```bash
+cargo run -p local-history-cli -- snapshot <project-root> --file <relative-path>
+cargo run -p local-history-cli -- restore <snapshot-id>
+cargo run -p local-history-cli -- restore --project-root <project-root> --recent <index>
+cargo run -p local-history-cli -- undo-restore <project-root>
+cargo run -p local-history-cli -- restore-last-safety <project-root>
+cargo run -p local-history-cli -- safety-list <project-root>
+```
+
+### Query and browse
+
+```bash
+cargo run -p local-history-cli -- recent <project-root> [--json]
+cargo run -p local-history-cli -- list <project-root> --page <n> --page-size <n> [--file <relative-path>] [--from <rfc3339>] [--to <rfc3339>] [--hour <YYYY-MM-DDTHH>] [--json]
+cargo run -p local-history-cli -- show <snapshot-id>
+cargo run -p local-history-cli -- browse <project-root>
+```
+
+### Grouped history and Markdown
+
+```bash
+cargo run -p local-history-cli -- history hour <project-root> --hour <YYYY-MM-DDTHH>
+cargo run -p local-history-cli -- history segment <project-root> --from <rfc3339> --to <rfc3339>
+cargo run -p local-history-cli -- view-root <project-root>
+cargo run -p local-history-cli -- render-markdown hour <project-root> --hour <YYYY-MM-DDTHH>
+cargo run -p local-history-cli -- render-markdown segment <project-root> --from <rfc3339> --to <rfc3339>
+cargo run -p local-history-cli -- rebuild-markdown-view <project-root>
+```
+
+### Retention and maintenance
+
+```bash
+cargo run -p local-history-cli -- status <project-root> [--json]
+cargo run -p local-history-cli -- prune <project-root> [--json]
+```
+
+## Sidecar command reference
+
+```bash
+cargo run -p local-history-sidecar -- health
+cargo run -p local-history-sidecar -- version
+cargo run -p local-history-sidecar -- status <project-root>
+cargo run -p local-history-sidecar -- ensure-daemon <project-root>
+cargo run -p local-history-sidecar -- watch <project-root>
+cargo run -p local-history-sidecar -- view-root <project-root>
+cargo run -p local-history-sidecar -- render-markdown current-hour <project-root>
+cargo run -p local-history-sidecar -- render-markdown previous-hour <project-root>
+cargo run -p local-history-sidecar -- render-markdown current-segment <project-root>
+cargo run -p local-history-sidecar -- render-markdown hour <project-root> --hour <YYYY-MM-DDTHH>
+cargo run -p local-history-sidecar -- render-markdown segment-at <project-root> --at <rfc3339>
+cargo run -p local-history-sidecar -- restore <snapshot-id>
+```
+
+## MCP server
+
+`local-history-mcp` is a newline-delimited JSON-RPC stdio server that exposes local-history tools through the Model Context Protocol.
+
+Run it directly:
+
+```bash
+cargo run -p local-history-mcp
+```
+
+Local usage help:
+
+```bash
+cargo run -p local-history-mcp -- --help
+```
+
+### Current MCP tools
+
+- `local_history_status`
+- `local_history_create_snapshot`
+- `local_history_recent_snapshots`
+- `local_history_view_snapshot`
+- `local_history_restore_snapshot`
+- `local_history_prune`
+
+Current tool contract:
+
+- most tools require explicit `project_root`;
+- snapshot view and restore work by exact `snapshot_id`;
+- all tools accept optional `data_dir` when you want to use a non-default local-history storage base directory;
+- `local_history_restore_snapshot` remains safety-first and creates a safety snapshot before writing the live file;
+- `local_history_diff_snapshot` does not exist yet because the project still has no dedicated diff surface.
+
+### Zed `context_servers` example
+
+Build the MCP binary:
+
+```bash
+cargo build -p local-history-mcp
+```
+
+Then register it in Zed settings:
+
+```json
+{
+  "context_servers": {
+    "local-history": {
+      "command": "/absolute/path/to/zed-local-history/target/debug/local-history-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+If you prefer packaged binaries over development binaries, point `command` at the installed or unpacked `local-history-mcp` executable instead.
+
+Current release contract:
+
+- platform bundles now include `local-history`, `local-history-sidecar`, `local-history-mcp`, `README.md`, and `LICENSE`;
+- fixed-name sidecar-only archives still exist separately for Zed extension bootstrap.
+
+### Example MCP usage
+
+Examples of requests that map well to the current tool surface:
+
+- "Show local-history status for `/absolute/path/to/project`."
+- "Create a snapshot of `src/lib.rs` under `/absolute/path/to/project`."
+- "List the last 10 local-history snapshots for `/absolute/path/to/project`."
+- "Show snapshot `<snapshot-id>`."
+- "Restore snapshot `<snapshot-id>`."
+- "Prune local history for `/absolute/path/to/project`."
+
+### Current MCP limitations
+
+- no prompts surface is exposed yet;
+- no resources surface is exposed yet;
+- no diff tool exists yet;
+- the Zed extension does not auto-register the MCP server yet, so direct `context_servers` configuration is the current path.
+
+## Zed usage
+
+### Install as a dev extension
+
+From Zed:
+
+1. open the extensions page;
+2. choose `Install Dev Extension`;
+3. select `editors/zed`.
+
+Then validate from the repository root:
+
+```bash
+cargo run -p xtask -- zed-ci
+```
+
+### What the extension does
+
+- resolves `local-history-sidecar` from `PATH` for development workflows;
+- otherwise downloads and caches the matching GitHub release asset;
+- verifies sidecar version compatibility before use;
+- runs focused sidecar commands from slash handlers.
+
+### Current slash commands
 
 - `/local-history-status`
 - `/local-history-start-watcher`
@@ -162,32 +488,190 @@ Current Zed-facing commands now cover:
 - `/local-history-segment <YYYY-MM-DDTHH:MM:SSZ>`
 - `/local-history-restore <snapshot-id>`
 
-The root workspace is pinned to Rust `1.75.0` so the core/cli/sidecar scaffold can compile immediately in conservative environments. The Zed extension package keeps its own `stable` toolchain in `editors/zed/rust-toolchain.toml`, because `wasm32-wasip2` support belongs to the newer extension path and should not force the native workspace to move in lockstep.
+### Important Zed limitation
 
-## Repository Layout
+The current Zed extension API does not provide a direct action for opening an arbitrary external file path. The extension therefore exposes or prints the generated Markdown path instead of pretending it can always open that file automatically.
+
+## Storage, privacy, and safety
+
+### Storage location
+
+Local history is stored outside the user repository:
+
+- macOS: `~/Library/Application Support/local-history`
+- Linux: `$XDG_DATA_HOME/local-history` or `~/.local/share/local-history`
+- Windows: `%LOCALAPPDATA%\\local-history`
+
+### Per-project layout
+
+```text
+projects/<project-id>/
+  metadata.sqlite
+  blobs/
+  view/
+  logs/
+```
+
+Meaning:
+
+- `metadata.sqlite`
+  snapshot metadata, tracked files, restore operations, generated Markdown index
+- `blobs/`
+  compressed content-addressed snapshot contents
+- `view/`
+  generated Markdown history tree
+- `logs/`
+  watcher log and watcher heartbeat/status files
+
+### Privacy and capture rules
+
+- any non-ignored file may be snapshotted if it is saved or manually targeted;
+- secrets in normal source files can be captured if they are not covered by ignore rules;
+- generated Markdown lives outside the repository and does not recursively snapshot itself;
+- restore always creates a safety snapshot before writing to the live file.
+
+### Built-in ignore rules
+
+Current built-in ignores skip:
+
+- `.git/`
+- `node_modules/`
+- `target/`
+- `dist/`
+- `build/`
+- `.next/`
+- `.cache/`
+- `coverage/`
+- `.env`
+- `.env.*`
+- `*.pem`
+- `*.key`
+- `*.p12`
+- `*.pfx`
+- `*.sqlite`
+- `*.db`
+- `*.log`
+
+Current nuance:
+
+- `.local-history-ignore` is reserved in the policy model, but project-local custom ignore parsing is not wired yet;
+- ignore behavior is built-in only today.
+
+### Deleting history
+
+Delete one project's history by removing its external project directory:
+
+```text
+projects/<project-id>/
+```
+
+Delete all history by removing the whole base `local-history` directory.
+
+## Troubleshooting
+
+### Sidecar not starting
+
+- run `cargo run -p local-history-sidecar -- status <project-root>`;
+- inspect `projects/<project-id>/logs/watcher.log`;
+- inspect `projects/<project-id>/logs/watcher-status.json`.
+
+### Watcher not detecting changes
+
+- confirm you are saving to disk, not only changing in-memory buffers;
+- confirm the path is not ignored;
+- remember that the watcher is polling-based, not event-driven.
+
+### Storage too large
+
+- run `cargo run -p local-history-cli -- status <project-root>`;
+- run `cargo run -p local-history-cli -- prune <project-root>`.
+
+### Markdown not updating
+
+- run `cargo run -p local-history-cli -- rebuild-markdown-view <project-root>`;
+- confirm raw snapshots actually exist with `recent` or `list`.
+
+### Restore failure
+
+- confirm the snapshot still exists with `show <snapshot-id>` or `recent <project-root>`;
+- note that a previously generated Markdown link can outlive the snapshot it references after pruning.
+
+### Unsupported platform in Zed bootstrap
+
+Current sidecar bootstrap contract covers:
+
+- macOS `x86_64`
+- macOS `aarch64`
+- Linux `x86_64`
+- Linux `aarch64`
+- Windows `x86_64`
+- Windows `aarch64`
+
+Current limitation:
+
+- `x86_64-unknown-linux-musl` is not part of the extension bootstrap contract because the current platform mapping distinguishes OS and CPU architecture, not Linux libc family.
+
+## Current limitations
+
+- there is no project-wide checkpoint abstraction yet; snapshots are per-file;
+- the watcher is polling-based rather than OS-event-based;
+- project-local custom ignore files are not wired yet;
+- the Zed extension reveals Markdown paths instead of directly opening arbitrary external files;
+- release workflow and extension bootstrap still need live external validation on a real tagged release;
+- the MCP server still needs live validation inside a real Zed Agent `context_servers` setup and does not yet expose prompts, resources, or diff tools.
+
+## Repository layout
 
 ```text
 zed-local-history/
   README.md
   RHYTHM.md
-  LICENSE
   Cargo.toml
   rust-toolchain.toml
-  .gitignore
-  agents/
-    AGENTS.md
-    README.md
-    GOALS.md
-    DEVELOPMENT_PLAN.md
   crates/
     local-history-core/
-    local-history-sidecar/
     local-history-cli/
+    local-history-sidecar/
+    local-history-mcp/
   editors/
     zed/
   xtask/
-  .github/
-    workflows/
-      ci.yml
-      release.yml
+```
+
+## Example end-to-end session
+
+Start the watcher:
+
+```bash
+cargo run -p local-history-sidecar -- ensure-daemon .
+```
+
+Edit and save `src/lib.rs`, then inspect the newest raw snapshot:
+
+```bash
+cargo run -p local-history-cli -- recent .
+```
+
+Restore the first item from the recent list:
+
+```bash
+cargo run -p local-history-cli -- restore --project-root . --recent 1
+```
+
+If the restore was wrong, undo it:
+
+```bash
+cargo run -p local-history-cli -- undo-restore .
+```
+
+Generate an hour view for browsing:
+
+```bash
+cargo run -p local-history-cli -- render-markdown hour . --hour 2026-05-03T14
+```
+
+Look up the generated view root:
+
+```bash
+cargo run -p local-history-cli -- view-root .
 ```

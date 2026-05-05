@@ -306,6 +306,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "local-history-mcp"
+version = "0.1.0"
+dependencies = [
+ "local-history-core",
+ "serde",
+ "serde_json",
+ "time",
+]
+
+[[package]]
 name = "local-history-sidecar"
 version = "0.1.0"
 dependencies = [

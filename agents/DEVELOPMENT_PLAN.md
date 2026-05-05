@@ -18,11 +18,12 @@ Rust sidecar
 + stable JSON output
 + generated Markdown history view
 + thin Zed extension integration
++ additive MCP stdio server
 ```
 
 The Zed extension should install/start the sidecar and make generated Markdown history easy to open inside Zed.
 
-The architecture should also leave room for a local MCP server so Zed's Agent Panel can call local-history tools directly without replacing the CLI workflow. This is a documentation and architecture concern, not a numbered MVP stage.
+The architecture should also leave room for a local MCP server so Zed's Agent Panel can call local-history tools directly without replacing the CLI workflow. This is an additive integration concern, not a numbered MVP stage.
 
 ## Additional Architecture Note — MCP Surface
 
@@ -41,14 +42,18 @@ crates/
 
 The MCP layer should stay thin and adapt protocol calls to existing core or sidecar behavior.
 
-Suggested tools:
+First implemented MCP tool slice:
 
 - `local_history_status`
 - `local_history_create_snapshot`
 - `local_history_recent_snapshots`
-- `local_history_diff_snapshot`
-- `local_history_restore_snapshot`
 - `local_history_view_snapshot`
+- `local_history_restore_snapshot`
+- `local_history_prune`
+
+Future MCP additions once dedicated product surfaces exist:
+
+- `local_history_diff_snapshot`
 
 If exposed through Zed, it may be connected either:
 
@@ -196,6 +201,7 @@ zed-local-history/
     local-history-core/
     local-history-sidecar/
     local-history-cli/
+    local-history-mcp/
 
   editors/
     zed/
@@ -221,9 +227,38 @@ members = [
   "crates/local-history-core",
   "crates/local-history-sidecar",
   "crates/local-history-cli",
+  "crates/local-history-mcp",
   "xtask"
 ]
 ```
+
+## Additional Implementation Note — MCP Server
+
+The MCP server is not a numbered stage, but when implemented it should follow this order:
+
+1. Create `crates/local-history-mcp` as a stdio JSON-RPC server.
+2. Support at least:
+   - `initialize`
+   - `ping`
+   - `tools/list`
+   - `tools/call`
+3. Expose the first stable tool slice:
+   - `local_history_status`
+   - `local_history_create_snapshot`
+   - `local_history_recent_snapshots`
+   - `local_history_view_snapshot`
+   - `local_history_restore_snapshot`
+   - `local_history_prune`
+4. Keep handlers thin by adapting to `local-history-core` or existing sidecar-facing behavior.
+5. Return both human-readable text content and stable structured JSON content in tool results.
+6. Keep extension-managed MCP registration optional; direct Zed `context_servers` setup is acceptable.
+
+Acceptance for this additive slice:
+
+- The server completes MCP initialization over stdio.
+- `tools/list` returns the documented tool set.
+- `tools/call` works for status, manual snapshot creation, recent listing, snapshot view, restore, and prune.
+- Restore remains safety-first through the MCP path.
 
 Recommended package defaults:
 
@@ -1226,3 +1261,183 @@ Use this as the actual execution order:
 ```
 
 This order keeps the project useful early through CLI and avoids blocking the MVP on advanced Zed UI APIs.
+
+---
+
+# External Validation Plan
+
+These validations are intentionally outside local unit tests and local CI. They must be run against real packaging, a real Zed install, and a real repository workflow.
+
+## 1. Tagged Release Validation
+
+### Goal
+
+Verify that the GitHub Release path works end-to-end, not just as static YAML.
+
+### Steps
+
+1. Push a real test tag from a clean commit.
+2. Wait for `.github/workflows/release.yml` to complete.
+3. Verify that the GitHub Release contains:
+   - user-facing platform bundles;
+   - fixed-name sidecar bootstrap archives;
+   - `SHA256SUMS.txt`.
+4. Download at least one archive and verify its checksum manually.
+5. Confirm archive contents match the documented contract.
+
+### Acceptance
+
+- Tagged workflow succeeds.
+- Assets are published to the Release, not only to workflow artifacts.
+- Checksums match downloaded files.
+
+## 2. Native Install Validation
+
+### Goal
+
+Confirm that a user can use the native surfaces without local repo-specific assumptions.
+
+### Steps
+
+1. On a fresh machine or clean shell profile, acquire a released binary bundle.
+2. Run:
+   - `local-history --help`
+   - `local-history-sidecar health`
+   - `local-history-sidecar version`
+3. Start a watcher on a sample project.
+4. Save a file and confirm a raw snapshot appears.
+5. Restore a snapshot and then undo the restore.
+6. Generate and inspect Markdown output.
+
+### Acceptance
+
+- Native binaries run outside the development workspace.
+- Watcher, restore, undo, and Markdown flows all work from released binaries.
+
+## 3. Live Zed Extension Validation
+
+### Goal
+
+Validate the real Zed user path instead of only compile-time extension checks.
+
+### Steps
+
+1. Install the extension in Zed as a dev extension or packaged extension.
+2. Open a real worktree.
+3. Run:
+   - `/local-history-status`
+   - `/local-history-start-watcher`
+   - `/local-history-current-hour`
+   - `/local-history-current-segment`
+   - `/local-history-restore <snapshot-id>`
+4. Confirm sidecar bootstrap behavior:
+   - dev `PATH` binary path;
+   - cached release asset path;
+   - incompatible `PATH` binary fallback.
+5. Confirm the returned Markdown paths are usable in real editor workflow.
+
+### Acceptance
+
+- Extension can resolve or download the sidecar.
+- Slash commands execute correctly inside a real worktree.
+- Restore works through the extension path.
+- Error messages are understandable when capabilities are missing.
+
+## 4. Real Project Watcher Validation
+
+### Goal
+
+Exercise watcher behavior on real editing patterns instead of synthetic unit-test-only cases.
+
+### Steps
+
+1. Use a non-trivial project with nested directories.
+2. Validate:
+   - normal save;
+   - repeated save without content change;
+   - atomic replace save;
+   - delete;
+   - rename through delete-and-create behavior;
+   - ignored path updates;
+   - large file updates above the size cap.
+3. Confirm raw snapshots match the previous on-disk state, not the new state.
+
+### Acceptance
+
+- The watcher captures previous contents correctly.
+- Unchanged saves do not create noise.
+- Ignore and size-limit rules behave as documented.
+
+## 5. Recovery Safety Validation
+
+### Goal
+
+Validate recovery trust on a real repository with realistic operator behavior.
+
+### Steps
+
+1. Restore by snapshot ID.
+2. Restore by recent-list number.
+3. Confirm safety snapshot creation before each restore.
+4. Undo the most recent restore.
+5. Restore the newest safety snapshot directly.
+6. Run `prune` and confirm the latest restore/undo chain remains recoverable.
+
+### Acceptance
+
+- Restore never silently destroys current state.
+- Undo remains usable after realistic restore activity.
+- Prune does not break the latest recovery chain.
+
+## 6. Documentation Smoke Validation
+
+### Goal
+
+Confirm that the root README is sufficient for a technical user without requiring internal contributor docs.
+
+### Steps
+
+1. Follow `README.md` from a clean clone.
+2. Run the documented validation commands.
+3. Use only the README for:
+   - watcher startup;
+   - snapshot browsing;
+   - restore;
+   - undo;
+   - Markdown generation;
+   - prune;
+   - Zed extension setup.
+4. Note any step that requires unstated assumptions.
+
+### Acceptance
+
+- README is self-contained for setup and usage.
+- Commands, examples, and caveats match actual behavior.
+
+## 7. MCP Validation
+
+### Goal
+
+Validate the additive MCP surface in a real agent client, not only through local unit tests.
+
+### Steps
+
+1. Register `local-history-mcp` in a real Zed `context_servers` config.
+2. Confirm MCP initialization succeeds and the server appears active.
+3. Verify `tools/list` exposes the expected local-history tools.
+4. Call:
+   - `local_history_status`
+   - `local_history_create_snapshot`
+   - `local_history_recent_snapshots`
+   - `local_history_view_snapshot`
+   - `local_history_restore_snapshot`
+   - `local_history_prune`
+5. Confirm restore still creates a safety snapshot before modifying the live file.
+6. Verify destructive-tool approval behavior in the real Agent Panel settings.
+
+### Acceptance
+
+- Zed can start the MCP server successfully.
+- The documented tools are available and callable.
+- Structured MCP output is usable by the agent.
+- Safety-first restore behavior is preserved through MCP.

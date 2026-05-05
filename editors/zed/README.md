@@ -12,7 +12,7 @@ The project goals are intentionally filesystem-first:
 
 The current Zed extension is no longer pure placeholder text, but it still stays intentionally thin.
 
-Zed's documented MCP server support also creates a second possible integration route: the extension may register a local-history MCP server for the Agent Panel, or users may connect such a server directly through their `context_servers` settings. That path is documented as additive to the current CLI/Markdown workflow.
+Zed's documented MCP server support also creates a second integration route: users may connect the implemented `local-history-mcp` server directly through their `context_servers` settings, and the extension may later register that server automatically. That path is additive to the current CLI/Markdown workflow.
 
 ## Current shape
 
@@ -27,7 +27,7 @@ Zed's documented MCP server support also creates a second possible integration r
 - make the sidecar executable where needed;
 - run focused sidecar commands such as `ensure-daemon`, `status`, and Markdown view lookups;
 - expose the most useful recovery flows through Zed-supported extension surfaces.
-- optionally register a local-history MCP server when that adapter exists.
+- optionally register the existing `local-history-mcp` server automatically when that extension surface is wired.
 
 The native sidecar now already exposes real JSON `health`, `status`, `watch`, and `ensure-daemon` behavior, so the remaining extension work is mainly about invoking those commands from Zed and presenting their results cleanly.
 
@@ -60,7 +60,7 @@ Current limitations:
 - sidecar bootstrap currently depends on GitHub release assets with stable names; the workflow now produces those assets plus release checksums, but the full packaging/release story still belongs to later-stage release hardening
 - `x86_64-unknown-linux-musl` is still not part of the extension bootstrap contract because the current platform mapping distinguishes OS and CPU architecture, not Linux libc family
 
-If MCP integration is added, these commands may coexist with Agent Panel tools rather than being replaced by them.
+The current MCP server can already coexist with these slash commands through direct `context_servers` configuration, even though extension-managed registration is not wired yet.
 
 ## Validation target
 

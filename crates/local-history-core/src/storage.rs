@@ -400,6 +400,22 @@ impl LocalHistoryStore {
         RetentionPolicy::default()
     }
 
+    pub fn total_snapshot_count(&self) -> Result<usize, StorageError> {
+        self.snapshot_count()
+    }
+
+    pub fn raw_snapshot_count(&self) -> Result<usize, StorageError> {
+        self.snapshot_count_for_kind(SnapshotKind::Raw)
+    }
+
+    pub fn safety_snapshot_count(&self) -> Result<usize, StorageError> {
+        self.snapshot_count_for_kind(SnapshotKind::Safety)
+    }
+
+    pub fn referenced_blob_bytes(&self) -> Result<u64, StorageError> {
+        self.current_referenced_blob_bytes()
+    }
+
     pub fn prune(
         &self,
         policy: &RetentionPolicy,
@@ -1538,6 +1554,20 @@ impl LocalHistoryStore {
                  FROM snapshots
                  WHERE project_id = ?1",
                 params![self.project.id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count as usize)
+            .map_err(StorageError::from)
+    }
+
+    fn snapshot_count_for_kind(&self, kind: SnapshotKind) -> Result<usize, StorageError> {
+        self.connection
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM snapshots
+                 WHERE project_id = ?1
+                   AND kind = ?2",
+                params![self.project.id.as_str(), kind.as_str()],
                 |row| row.get::<_, i64>(0),
             )
             .map(|count| count as usize)
