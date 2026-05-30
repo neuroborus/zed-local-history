@@ -6,17 +6,49 @@ authors = ["neuroborus"]
 repository = "https://github.com/neuroborus/zed-local-history"
 schema_version = 1
 
+[context_servers.local-history]
+
 [slash_commands.local-history-status]
-description = "Show local-history bootstrap status"
+description = "Show local-history watcher and storage status"
 requires_argument = false
 tooltip_text = "Show local-history status"
 
-[slash_commands.local-history-recent]
-description = "Describe the recent snapshots flow"
+[slash_commands.local-history-start-watcher]
+description = "Start the local-history watcher for the current project"
 requires_argument = false
-tooltip_text = "Show recent snapshot flow"
+tooltip_text = "Start local-history watcher"
 
 [slash_commands.local-history-view]
-description = "Describe how the Markdown view will be exposed"
+description = "Show the root path of the generated Markdown history view"
 requires_argument = false
-tooltip_text = "Explain snapshot view flow"
+tooltip_text = "Show Markdown view root"
+
+[slash_commands.local-history-current-hour]
+description = "Generate and show the current hour Markdown history path"
+requires_argument = false
+tooltip_text = "Show current hour history"
+
+[slash_commands.local-history-current-segment]
+description = "Generate and show the current 10-minute segment Markdown history path"
+requires_argument = false
+tooltip_text = "Show current segment history"
+
+[slash_commands.local-history-previous-hour]
+description = "Generate and show the previous hour Markdown history path"
+requires_argument = false
+tooltip_text = "Show previous hour history"
+
+[slash_commands.local-history-hour]
+description = "Generate and show a specific hour Markdown history path"
+requires_argument = true
+tooltip_text = "Show hour history"
+
+[slash_commands.local-history-segment]
+description = "Generate and show the 10-minute segment containing a specific ISO timestamp"
+requires_argument = true
+tooltip_text = "Show segment history"
+
+[slash_commands.local-history-restore]
+description = "Restore a snapshot by exact snapshot ID"
+requires_argument = true
+tooltip_text = "Restore snapshot"

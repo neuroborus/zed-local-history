@@ -1,18 +1,18 @@
 [package]
-name = "local-history-cli"
+name = "local-history-mcp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "User-facing CLI for zed-local-history."
+description = "MCP stdio server for zed-local-history."
 
 [[bin]]
-name = "local-history"
+name = "local-history-mcp"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "=4.5.23", features = ["derive"] }
 local-history-core = { path = "../local-history-core" }
+serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.133"
-time = { version = "=0.3.36", features = ["formatting", "macros", "parsing"] }
+time = { version = "=0.3.36", features = ["formatting", "parsing", "macros"] }

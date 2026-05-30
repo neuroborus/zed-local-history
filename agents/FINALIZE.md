@@ -1,12 +1,6 @@
-# FINALIZE.md
+# Finalization Checklist
 
-> **Post-change checklist for `zed-local-history`**
->
-> Run through this after feature or refactor work to keep the native workspace, Zed extension, and project docs aligned.
->
-> Last Updated: 2026-05-02
-
----
+Run through this after feature or refactor work to keep the native workspace, Zed extension, and project docs aligned.
 
 ## 1. Tests for new functionality
 
@@ -102,6 +96,8 @@ cargo run -p xtask -- full-ci
 ## 9. Documentation review
 
 - [ ] `README.md` still reflects the current repository shape and validation flow
+- [ ] `RHYTHM.md` records meaningful architectural, workflow, or behavior changes in newest-first order
+- [ ] `llms.txt` and MCP `SERVER_INSTRUCTIONS` stay aligned when agent routing or MCP tool behavior changes
 - [ ] `editors/zed/README.md` still reflects the current extension strategy when that package changes
 - [ ] `agents/*` remain accurate if repository boundaries, workflow, or architecture changed materially
 - [ ] Examples and command snippets still match the actual repository commands
@@ -110,6 +106,6 @@ cargo run -p xtask -- full-ci
 
 ## 10. Commit preparation (do not commit)
 
-- [ ] Review the final diff for scaffolding drift, placeholder text, and stale bootstrap comments
+- [ ] Review the final diff for scaffolding drift, temporary text, and stale bootstrap comments
 - [ ] Draft a concise commit message that matches the actual scope of the change set
 - [ ] Present the proposed commit summary to the user; do not run `git commit` automatically

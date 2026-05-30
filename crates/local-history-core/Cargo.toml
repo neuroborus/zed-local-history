@@ -9,3 +9,10 @@ description = "Core domain and storage helpers for zed-local-history."
 
 [lib]
 path = "src/lib.rs"
+
+[dependencies]
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+sha2 = "0.10.9"
+thiserror = "1.0.69"
+time = { version = "=0.3.36", features = ["formatting", "parsing", "macros", "local-offset"] }
+zstd = "0.13.2"

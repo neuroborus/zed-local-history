@@ -4,6 +4,7 @@ members = [
     "crates/local-history-core",
     "crates/local-history-sidecar",
     "crates/local-history-cli",
+    "crates/local-history-mcp",
     "xtask",
 ]
 exclude = ["editors/zed"]

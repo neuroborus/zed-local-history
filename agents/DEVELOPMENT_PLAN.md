@@ -1,8 +1,4 @@
-# DEVELOPMENT_PLAN.md
-
 # Local History for Zed — Development Plan
-
-_Last updated: 2026-05-02_
 
 ## Goal
 
@@ -18,9 +14,43 @@ Rust sidecar
 + stable JSON output
 + generated Markdown history view
 + thin Zed extension integration
++ additive MCP stdio server
 ```
 
 The Zed extension should install/start the sidecar and make generated Markdown history easy to open inside Zed.
+
+The repository includes an additive MCP server (`local-history-mcp`) so agent clients such as the Zed Agent Panel can call local-history tools without replacing the CLI workflow.
+
+## MCP Surface (implemented)
+
+`local-history-mcp` is an additional integration surface, not a replacement for the CLI.
+
+```text
+crates/
+  local-history-core/
+  local-history-cli/
+  local-history-mcp/
+```
+
+The MCP layer stays thin and adapts protocol calls to `local-history-core` (not a second storage implementation).
+
+Current MCP tool surface:
+
+- `local_history_guide`
+- `local_history_status`
+- `local_history_create_snapshot`
+- `local_history_recent_snapshots`
+- `local_history_view_snapshot`
+- `local_history_diff_snapshot`
+- `local_history_restore_snapshot`
+- `local_history_prune`
+
+MCP resources: `local-history://guide` (same text as `llms.txt`).
+
+In Zed, MCP may be connected either:
+
+- directly through user `context_servers` settings; or
+- through extension-managed registration in `extension.toml`.
 
 ## Final MVP Result
 
@@ -163,6 +193,7 @@ zed-local-history/
     local-history-core/
     local-history-sidecar/
     local-history-cli/
+    local-history-mcp/
 
   editors/
     zed/
@@ -188,9 +219,39 @@ members = [
   "crates/local-history-core",
   "crates/local-history-sidecar",
   "crates/local-history-cli",
+  "crates/local-history-mcp",
   "xtask"
 ]
 ```
+
+## Additional Implementation Note — MCP Server
+
+The MCP server is not a numbered stage, but when implemented it should follow this order:
+
+1. Create `crates/local-history-mcp` as a stdio JSON-RPC server.
+2. Support at least:
+   - `initialize`
+   - `ping`
+   - `tools/list`
+   - `tools/call`
+3. Expose the first stable tool slice:
+   - `local_history_status`
+   - `local_history_create_snapshot`
+   - `local_history_recent_snapshots`
+   - `local_history_view_snapshot`
+   - `local_history_restore_snapshot`
+   - `local_history_prune`
+4. Keep handlers thin by adapting to `local-history-core` or existing sidecar-facing behavior.
+5. Return both human-readable text content and stable structured JSON content in tool results.
+6. Keep direct Zed `context_servers` setup as a supported fallback.
+7. When the Zed extension registers the MCP server automatically, treat any `PATH` lookup for `local-history-mcp` as a development-only shortcut. Production UX must resolve, download, cache, and launch the MCP binary through the same release-bootstrap model used for the sidecar.
+
+Acceptance for this additive slice:
+
+- The server completes MCP initialization over stdio.
+- `tools/list` returns the documented tool set.
+- `tools/call` works for status, manual snapshot creation, recent listing, snapshot view, restore, and prune.
+- Restore remains safety-first through the MCP path.
 
 Recommended package defaults:
 
@@ -386,7 +447,15 @@ local-history show <snapshot-id>
 
 It should print metadata and optionally content preview.
 
-### 4.3 Add recent snapshots command
+### 4.3 Add diff command
+
+```text
+local-history diff <snapshot-id>
+```
+
+It should print a unified text diff from the snapshot to the current live file. Binary diffs can report a clear unsupported textual diff error.
+
+### 4.4 Add recent snapshots command
 
 ```text
 local-history recent <project-root> --limit 10
@@ -402,7 +471,7 @@ Latest snapshots
 [3] 2026-05-02 14:11:03  src/orders/order.service.ts        ghi789
 ```
 
-### 4.4 Add basic restore by snapshot ID
+### 4.5 Add basic restore by snapshot ID
 
 ```text
 local-history restore <snapshot-id>
@@ -419,6 +488,7 @@ A developer can manually create snapshots, list them, inspect them, and perform 
 - Manual snapshot command works.
 - `recent --limit 10` shows numbered snapshots.
 - `show <snapshot-id>` displays useful metadata.
+- `diff <snapshot-id>` displays a unified text diff against the current live file.
 - Basic restore by snapshot ID works.
 - Commands return clear errors for missing files or missing snapshots.
 
@@ -575,6 +645,24 @@ Minimum behavior:
 
 This can be prompt-based. It does not need to be a full TUI for MVP.
 
+### 6.5 Make snapshot IDs ergonomic without weakening identity
+
+Keep stored snapshot identity opaque and stable:
+
+- internal snapshot IDs remain opaque hash-like identifiers;
+- do not make timestamp, path, or display formatting part of the storage identity contract;
+- keep timestamp and path as separate metadata fields in human, JSON, Markdown, and MCP output.
+
+Improve human recovery ergonomics:
+
+- show timestamp, path, list number, and a 12-character snapshot ID prefix in human tables;
+- keep full snapshot IDs available in `--json`, Markdown detail pages, logs, and MCP structured output;
+- let `restore` and `show` accept either a full snapshot ID or a unique snapshot ID prefix;
+- if a prefix is ambiguous, fail with a clear message and suggest longer matching prefixes;
+- keep `restore --project-root <path> --recent <index>` as the fastest fresh-list recovery path.
+
+The goal is the familiar Git/Docker-style workflow: short prefixes are convenient for humans, while full opaque IDs remain the durable machine contract.
+
 ## Expected Result
 
 A user can browse and recover snapshots without knowing exact snapshot IDs.
@@ -584,6 +672,8 @@ A user can browse and recover snapshots without knowing exact snapshot IDs.
 - Paginated listing works.
 - Filtering by file and time range works.
 - Query commands support `--json`.
+- Human tables use compact ID prefixes without making those prefixes dead-end values.
+- `show` and `restore` accept unique snapshot ID prefixes and report ambiguity clearly.
 - Interactive browse mode supports page navigation.
 - Interactive browse mode supports selecting a snapshot.
 - Interactive restore asks for confirmation.
@@ -865,6 +955,23 @@ Restore from Zed must call the sidecar.
 
 The extension must not implement restore logic itself.
 
+### 10.8 Keep MCP registration optional
+
+If the project adds an MCP server, the extension may register it through `context_servers.*` in `extension.toml` and return its startup command from the extension API.
+
+That route should remain additive. The MVP extension must not depend on MCP for basic recovery.
+
+If the extension registers MCP for Agent Panel use, the production path must not require users to put `local-history-mcp` in `PATH`. The extension should:
+
+- resolve a development `local-history-mcp` from `PATH` only for local/dev installs;
+- otherwise download the matching release asset;
+- cache it in an extension-managed location;
+- make it executable where needed;
+- verify version compatibility before launching;
+- produce clear errors when no supported MCP binary is available.
+
+This should mirror the sidecar bootstrap behavior closely enough that sidecar and MCP binary release contracts stay aligned.
+
 ## Expected Result
 
 A Zed user can install the extension, start watching, open history Markdown, and restore snapshots.
@@ -876,6 +983,7 @@ A Zed user can install the extension, start watching, open history Markdown, and
 - Extension can open snapshot view or generated report.
 - Extension can show status.
 - Extension can invoke restore by snapshot ID.
+- If Agent Panel MCP registration is enabled, the extension can start the MCP server without requiring manual `PATH` setup in production.
 - Errors are clear when required capabilities are unavailable.
 - User does not need to manually install Rust, Node.js, or system dependencies.
 
@@ -915,15 +1023,103 @@ Track:
 
 - extension version;
 - sidecar version;
+- MCP binary version;
 - minimum compatible sidecar version.
+- minimum compatible MCP binary version.
+
+### 11.3.1 Add MCP binary bootstrap parity
+
+The Zed extension's MCP registration must not depend on `local-history-mcp` being manually installed or present in `PATH` for normal users.
+
+Implement release bootstrap parity with the sidecar:
+
+- publish fixed-name MCP-only archives for every supported platform;
+- map Zed OS/architecture to the correct MCP archive;
+- download and cache the matching MCP binary in the extension work directory;
+- mark the binary executable on Unix platforms;
+- probe `local-history-mcp --version` or an equivalent machine-readable version command;
+- fall back from incompatible or missing `PATH` binaries to the cached/downloaded release binary;
+- report unsupported platforms and missing release assets clearly.
+
+Development installs may still prefer a `PATH` binary to support local iteration.
+
+Local implementation status:
+
+- implemented in the Zed extension through the same release-bootstrap model as the sidecar;
+- release workflow now emits fixed-name MCP-only archives for every supported platform;
+- live tagged-release validation is still tracked under the external validation plan.
+
+### 11.3.2 Add friendly local-dev and CLI UX shortcuts
+
+Manual testing showed that the current development path still makes testers compose long shell commands, export `PATH` by hand, and call sidecar-oriented commands for common user workflows.
+
+Add a small user-facing UX layer before more release polish:
+
+- add an `xtask` command such as `xtask zed-dev` or `xtask manual-zed` that:
+  - builds `local-history-cli`, `local-history-sidecar`, and `local-history-mcp`;
+  - prepares or reuses a test project path;
+  - launches Zed with `RUSTUP_TOOLCHAIN=stable`, cargo in `PATH`, and local debug binaries in `PATH`;
+  - prints the exact project root, binary paths, and first Agent prompt to try.
+- add CLI shortcuts for common workflows so normal users do not need sidecar commands:
+  - `local-history start <project-root>` for `local-history-sidecar ensure-daemon`;
+  - `local-history status <project-root>` with watcher state included;
+  - `local-history render-markdown current-hour <project-root>`;
+  - `local-history render-markdown current-segment <project-root>`;
+  - `local-history render-markdown previous-hour <project-root>`.
+- keep `local-history-sidecar` documented as an internal/editor boundary, not the main human entry point.
+- update README and manual testing docs to prefer the friendly commands once implemented.
+
+Acceptance:
+
+- a contributor can launch the dev Zed scenario with one documented command;
+- a user can start watching, check status, list snapshots, render current history, restore, and undo through `local-history` without directly calling `local-history-sidecar`;
+- existing sidecar commands remain available for extension integration and debugging.
+
+### 11.3.3 Add MCP agent operating context
+
+The Agent Panel can call tools, but tool names alone do not teach the model the product's recovery semantics or how to interpret natural-language requests such as "what changed". Provide a compact, maintained agent guide that explains storage, previous-state snapshots, restore safety, Git vs local-history routing, natural-language intent mapping, and MCP or CLI usage.
+
+Implementation:
+
+- keep root `llms.txt` as the concise agent operating guide;
+- map common natural-language intents (change summary, recovery, diff, status) to MCP tools or CLI commands, including when Git is not the right tool;
+- expose the same guide through a read-only `local_history_guide` MCP tool;
+- expose the same guide through MCP as `local-history://guide`;
+- include safety-first restore, intent mapping summary, and previous-state snapshot rules in MCP initialize instructions;
+- document capability-based agent integration: MCP tools when exposed, CLI shell workflow when not;
+- document that Zed Agent Panel uses MCP tools, not extension slash commands, when MCP is available;
+- keep the guide aligned with README, crate READMEs, and manual testing docs.
+
+Acceptance:
+
+- MCP `initialize` returns actionable server instructions;
+- MCP `tools/list` exposes `local_history_guide`;
+- MCP `tools/call` returns the guide through `local_history_guide`;
+- MCP `resources/list` exposes `local-history://guide`;
+- MCP `resources/read` returns the guide text;
+- docs point agents and contributors to `llms.txt`;
+- tests cover the resource and initialization contract.
+
+Local implementation status:
+
+- implemented in `local-history-mcp`;
+- root `llms.txt` added and packaged into the MCP binary;
+- natural-language intent mapping lives in `llms.txt` and a condensed form in MCP `SERVER_INSTRUCTIONS`;
+- guide trimmed to agent-ops essentials; README [Examples](../README.md#examples) and `docs/` GIFs cover user-facing demos;
+- read-only `local_history_guide` tool added for clients that surface tools more reliably than resources;
+- README and agent docs reference the guide;
+- live Agent Panel validation remains tracked under the external validation plan.
 
 ### 11.4 Define update behavior
 
 Decide whether the extension:
 
 - downloads sidecar once;
+- downloads MCP binary once;
 - updates sidecar automatically;
+- updates MCP binary automatically;
 - checks sidecar version on startup;
+- checks MCP binary version before Agent Panel launch;
 - supports user-provided binary path.
 
 ### 11.5 Prepare Zed extension submission
@@ -939,8 +1135,10 @@ The project can publish installable artifacts for supported platforms.
 - Release workflow builds native binaries.
 - Artifacts include checksums.
 - Extension selects correct asset.
+- Extension selects correct MCP asset when Agent Panel MCP registration is enabled.
 - Unsupported platforms show clear error.
 - Sidecar compatibility is checked.
+- MCP binary compatibility is checked.
 - Zed extension is ready for submission.
 
 ---
@@ -1027,6 +1225,7 @@ The MVP is usable, documented, safe, and test-covered.
 - User can save a file and see a snapshot.
 - User can list latest 10 snapshots.
 - User can paginate snapshots.
+- User can view a unified diff from a snapshot to the current live file.
 - User can restore by ID.
 - User can restore by recent-list number.
 - Restore always creates a safety snapshot.
@@ -1061,10 +1260,16 @@ Add optional grouping by:
 
 ### 13.2 Better diff support
 
-Add:
+**Implemented (Stage 13.2 first slice):**
 
-- unified diff in CLI;
-- generated diff Markdown;
+- CLI `local-history diff <snapshot-id-or-unique-prefix>` for text snapshots against the current live file;
+- MCP `local_history_diff_snapshot` with the same unified diff and an `unchanged` flag;
+- shared diff logic in `local-history-core`;
+- binary snapshots reported as unsupported for textual diff.
+
+**Still post-MVP:**
+
+- generated diff Markdown pages;
 - temporary files for manual comparison;
 - native side-by-side diff if Zed exposes a suitable API.
 
@@ -1101,66 +1306,79 @@ Because the sidecar is editor-independent, support can be added for:
 
 ## Core
 
-- [ ] Project identity is stable.
-- [ ] Snapshot storage is content-addressed.
-- [ ] SQLite metadata is persisted.
-- [ ] Blobs are compressed.
-- [ ] Ignored files are skipped.
-- [ ] Large files are skipped or handled safely.
+- [x] Project identity is stable.
+- [x] Snapshot storage is content-addressed.
+- [x] SQLite metadata is persisted.
+- [x] Blobs are compressed.
+- [x] Ignored files are skipped.
+- [x] Large files are skipped or handled safely.
 
 ## Watcher
 
-- [ ] Initial scan works.
-- [ ] Save/change detection works.
-- [ ] Atomic writes are handled.
-- [ ] Duplicate events are debounced.
-- [ ] Delete snapshots are recoverable.
-- [ ] Daemon status is available.
+- [x] Initial scan works.
+- [x] Save/change detection works.
+- [x] Atomic writes are handled.
+- [x] Duplicate events are debounced.
+- [x] Delete snapshots are recoverable.
+- [x] Daemon status is available.
 
 ## CLI
 
-- [ ] `recent --limit 10` works.
-- [ ] Recent list is numbered.
-- [ ] Restore by snapshot ID works.
-- [ ] Restore by recent-list number works.
-- [ ] Pagination works.
-- [ ] Filters by file/time work.
-- [ ] Basic interactive browse mode works.
-- [ ] JSON output is available for query commands.
+- [x] `recent --limit 10` works.
+- [x] Recent list is numbered.
+- [x] Restore by snapshot ID works.
+- [x] Restore/show by unique snapshot ID prefix works.
+- [x] Unified text diff by unique snapshot ID prefix works.
+- [x] Restore by recent-list number works.
+- [x] Pagination works.
+- [x] Filters by file/time work.
+- [x] Basic interactive browse mode works.
+- [x] JSON output is available for query commands.
 
 ## Restore Safety
 
-- [ ] Safety snapshot is created before every restore.
-- [ ] Restore operation is recorded.
-- [ ] Undo restore works.
-- [ ] Safety snapshots are visible through CLI.
-- [ ] Restore never silently destroys current state.
+- [x] Safety snapshot is created before every restore.
+- [x] Restore operation is recorded.
+- [x] Undo restore works.
+- [x] Safety snapshots are visible through CLI.
+- [x] Restore never silently destroys current state.
 
 ## Markdown
 
-- [ ] Hour report generation works.
-- [ ] 10-minute segment report generation works.
-- [ ] Filesystem-browsable Markdown view exists.
-- [ ] Exact snapshot Markdown files exist.
-- [ ] Markdown view can be rebuilt.
-- [ ] Markdown generation does not trigger recursive snapshots.
+- [x] Hour report generation works.
+- [x] 10-minute segment report generation works.
+- [x] Filesystem-browsable Markdown view exists.
+- [x] Exact snapshot Markdown files exist.
+- [x] Markdown view can be rebuilt.
+- [x] Markdown generation does not trigger recursive snapshots.
 
 ## Zed Extension
 
-- [ ] Extension can install/download sidecar.
-- [ ] Extension can start sidecar.
-- [ ] Extension can show status.
-- [ ] Extension can open generated Markdown.
-- [ ] Extension can request restore by snapshot ID.
-- [ ] Clear errors are shown when capabilities are missing.
+- [x] Extension can install/download sidecar.
+- [x] Extension can start sidecar.
+- [x] Extension can show status.
+- [x] Extension can open or reveal generated Markdown in the currently supported API shape.
+- [x] Extension can request restore by snapshot ID.
+- [x] Extension can register the MCP context server for Agent Panel use.
+- [x] Extension can resolve/download the MCP binary without requiring manual `PATH` setup in production.
+- [x] MCP binary compatibility is checked before Agent Panel launch.
+- [x] Clear errors are shown when capabilities are missing.
+
+## MCP Agent Context
+
+- [x] MCP initialize returns operating instructions.
+- [x] MCP exposes `local_history_guide`.
+- [x] MCP exposes `local-history://guide`.
+- [x] Agent guide explains storage, previous-state snapshots, restore safety, Git vs local-history routing, natural-language intent mapping, and MCP or CLI usage.
+- [x] Agent guide is packaged into the MCP binary (~115 lines; contributor architecture lives in `GOALS.md`, not `llms.txt`).
 
 ## Release
 
-- [ ] CI passes.
-- [ ] Release artifacts are built.
-- [ ] Checksums are generated.
-- [ ] Platform compatibility is documented.
-- [ ] Installation flow is documented.
+- [x] CI passes.
+- [ ] Release artifacts are built on a real tagged run.
+- [ ] Checksums are generated and verified on a real tagged run.
+- [x] Platform compatibility is documented.
+- [x] Installation flow is documented.
 
 ---
 
@@ -1187,3 +1405,199 @@ Use this as the actual execution order:
 ```
 
 This order keeps the project useful early through CLI and avoids blocking the MVP on advanced Zed UI APIs.
+
+---
+
+# External Validation Plan
+
+These validations are intentionally outside local unit tests and local CI. They must be run against real packaging, a real Zed install, and a real repository workflow.
+
+## 1. Tagged Release Validation
+
+### Goal
+
+Verify that the GitHub Release path works end-to-end, not just as static YAML.
+
+### Steps
+
+1. Push a real test tag from a clean commit.
+2. Wait for `.github/workflows/release.yml` to complete.
+3. Verify that the GitHub Release contains:
+   - user-facing platform bundles;
+   - fixed-name sidecar bootstrap archives;
+   - fixed-name MCP bootstrap archives;
+   - `SHA256SUMS.txt`.
+4. Download at least one archive and verify its checksum manually.
+5. Confirm archive contents match the documented contract.
+
+### Acceptance
+
+- Tagged workflow succeeds.
+- Assets are published to the Release, not only to workflow artifacts.
+- Checksums match downloaded files.
+
+## 2. Native Install Validation
+
+### Goal
+
+Confirm that a user can use the native surfaces without local repo-specific assumptions.
+
+### Steps
+
+1. On a fresh machine or clean shell profile, acquire a released binary bundle.
+2. Run:
+   - `local-history --help`
+   - `local-history-sidecar health`
+   - `local-history-sidecar version`
+3. Start a watcher on a sample project.
+4. Save a file and confirm a raw snapshot appears.
+5. Restore a snapshot and then undo the restore.
+6. Generate and inspect Markdown output.
+
+### Acceptance
+
+- Native binaries run outside the development workspace.
+- Watcher, restore, undo, and Markdown flows all work from released binaries.
+
+## 3. Live Zed Extension Validation
+
+### Goal
+
+Validate the real Zed user path instead of only compile-time extension checks.
+
+### Steps
+
+1. Install the extension in Zed as a dev extension or packaged extension.
+2. Open a real worktree.
+3. Run:
+   - `/local-history-status`
+   - `/local-history-start-watcher`
+   - `/local-history-current-hour`
+   - `/local-history-current-segment`
+   - `/local-history-restore <snapshot-id>`
+4. Confirm sidecar bootstrap behavior:
+   - dev `PATH` binary path;
+   - cached release asset path;
+   - incompatible `PATH` binary fallback.
+5. Confirm the returned Markdown paths are usable in real editor workflow.
+
+### Acceptance
+
+- Extension can resolve or download the sidecar.
+- Slash commands execute correctly inside a real worktree.
+- Restore works through the extension path.
+- Error messages are understandable when capabilities are missing.
+
+## 4. Real Project Watcher Validation
+
+### Goal
+
+Exercise watcher behavior on real editing patterns instead of synthetic unit-test-only cases.
+
+### Steps
+
+1. Use a non-trivial project with nested directories.
+2. Validate:
+   - normal save;
+   - repeated save without content change;
+   - atomic replace save;
+   - delete;
+   - rename through delete-and-create behavior;
+   - ignored path updates;
+   - large file updates above the size cap.
+3. Confirm raw snapshots match the previous on-disk state, not the new state.
+
+### Acceptance
+
+- The watcher captures previous contents correctly.
+- Unchanged saves do not create noise.
+- Ignore and size-limit rules behave as documented.
+
+## 5. Recovery Safety Validation
+
+### Goal
+
+Validate recovery trust on a real repository with realistic operator behavior.
+
+### Steps
+
+1. Restore by snapshot ID.
+2. Restore by recent-list number.
+3. Confirm safety snapshot creation before each restore.
+4. Undo the most recent restore.
+5. Restore the newest safety snapshot directly.
+6. Run `prune` and confirm the latest restore/undo chain remains recoverable.
+
+### Acceptance
+
+- Restore never silently destroys current state.
+- Undo remains usable after realistic restore activity.
+- Prune does not break the latest recovery chain.
+
+## 6. Documentation Smoke Validation
+
+### Goal
+
+Confirm that the root README is sufficient for a technical user without requiring internal contributor docs.
+
+### Steps
+
+1. Follow `README.md` from a clean clone.
+2. Run the documented validation commands.
+3. Use only the README for:
+   - watcher startup;
+   - snapshot browsing;
+   - restore;
+   - undo;
+   - Markdown generation;
+   - prune;
+   - Zed extension setup.
+4. Note any step that requires unstated assumptions.
+
+### Acceptance
+
+- README is self-contained for setup and usage.
+- Commands, examples, and caveats match actual behavior.
+
+## 7. MCP Validation
+
+### Goal
+
+Validate the additive MCP surface in a real agent client, not only through local unit tests.
+
+### Steps
+
+1. Validate the development path:
+   - install the Zed dev extension;
+   - put `target/debug/local-history-mcp` in `PATH`;
+   - confirm the extension-managed `local-history` context server starts.
+2. Validate the production path:
+   - remove local development binaries from `PATH`;
+   - install or run the extension against a tagged release;
+   - confirm the extension downloads/caches the matching `local-history-mcp` release asset.
+3. Validate the manual fallback path by registering `local-history-mcp` in a real Zed `context_servers` config with an explicit binary path.
+4. Confirm MCP initialization succeeds and the server appears active in each path.
+5. Verify `tools/list` exposes the expected local-history tools.
+6. Verify `tools/call` for `local_history_guide` returns the guide text.
+7. Verify `resources/list` exposes `local-history://guide`.
+8. Verify `resources/read` returns the guide text and the agent can use it to explain restore safety, intent mapping, and when to prefer local-history over Git.
+9. Call:
+   - `local_history_status`
+   - `local_history_create_snapshot`
+   - `local_history_recent_snapshots`
+   - `local_history_view_snapshot`
+   - `local_history_diff_snapshot`
+   - `local_history_restore_snapshot`
+   - `local_history_prune`
+10. Ask a natural-language change-summary question (for example "what changed in this file recently?") and confirm the agent uses MCP tools rather than Git or the live file alone.
+11. Confirm restore still creates a safety snapshot before modifying the live file.
+12. Verify destructive-tool approval behavior in the real Agent Panel settings.
+
+### Acceptance
+
+- Zed can start the MCP server successfully.
+- Production Agent Panel use does not require manual `PATH` setup for `local-history-mcp`.
+- The documented tools are available and callable.
+- The agent guide tool/resource is available and useful in a real Agent Panel session, including natural-language intent routing from `llms.txt`.
+- Structured MCP output is usable by the agent.
+- Safety-first restore behavior is preserved through MCP.

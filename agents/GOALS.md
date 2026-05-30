@@ -1,8 +1,4 @@
-# GOALS.md
-
 # Local History for Zed
-
-_Last updated: 2026-04-30_
 
 ## 1. Project Vision
 
@@ -38,6 +34,8 @@ Zed integration is a convenience layer.
 Markdown files are a browsable presentation layer.
 CLI commands are the reliable recovery interface.
 ```
+
+The same core may also be exposed through an MCP server so Zed's Agent Panel can call local-history tools directly. That surface should complement the CLI, not replace it.
 
 ## 2. MVP Product Direction
 
@@ -114,58 +112,41 @@ If Zed later exposes a visual extension API, the same sidecar JSON contract shou
 
 ## 5. High-Level Architecture
 
-This should be a monorepo with two main deliverables:
+This should be a monorepo with three integration deliverables over one core:
 
-1. A Zed extension.
-2. A native Rust sidecar binary.
+1. Native Rust binaries: sidecar, CLI, and MCP adapter (`local-history-core` + executables).
+2. A Zed extension (`editors/zed`).
+3. Runtime agent documentation: root `llms.txt`, packaged into MCP as `local-history://guide`.
+
+The MCP server exposes local-history tools to agent clients such as the Zed Agent Panel. It complements the CLI; it does not replace it.
 
 Recommended repository shape:
 
 ```text
 zed-local-history/
   README.md
-  LICENSE
+  llms.txt
+  docs/
+  RHYTHM.md
   agents/
     AGENTS.md
     README.md
     GOALS.md
     DEVELOPMENT_PLAN.md
+    FINALIZE.md
+    ZED_MANUAL_TESTING.md
 
   crates/
     local-history-core/
-      src/
-        lib.rs
-      Cargo.toml
-
-    local-history-sidecar/
-      src/
-        main.rs
-      Cargo.toml
-
     local-history-cli/
-      src/
-        main.rs
-      Cargo.toml
+    local-history-sidecar/
+    local-history-mcp/
 
   editors/
     zed/
-      extension.toml
-      Cargo.toml
-      src/
-        lib.rs
-      README.md
-      LICENSE
 
   xtask/
-    src/
-      main.rs
-    Cargo.toml
-
-  .github/
-    workflows/
-      ci.yml
-      release.yml
-
+  .github/workflows/
   rust-toolchain.toml
   Cargo.toml
 ```
@@ -226,7 +207,34 @@ The CLI is not secondary. It is the reliable interface for:
 - rebuilding the Markdown view;
 - exporting JSON.
 
-### 5.4 `editors/zed`
+### 5.4 `local-history-mcp`
+
+MCP server adapter for agent clients.
+
+Responsibilities:
+
+- expose local-history tools and the packaged agent guide through MCP;
+- translate MCP tool requests into `local-history-core` operations;
+- keep destructive actions such as restore safety-first;
+- return stable, agent-friendly structured output for recent snapshots, snapshot view, snapshot diff, status, and restore flows;
+- package root `llms.txt` as `local-history://guide` and summarize intent mapping in MCP initialize instructions.
+
+Initial implemented tool surface:
+
+- `local_history_guide`
+- `local_history_status`
+- `local_history_create_snapshot`
+- `local_history_recent_snapshots`
+- `local_history_view_snapshot`
+- `local_history_diff_snapshot`
+- `local_history_restore_snapshot`
+- `local_history_prune`
+
+MCP remains an adapter layer over `local-history-core`; it must not become a second home for storage or restore business logic.
+
+Runtime agent documentation lives in root `llms.txt` (natural-language intent mapping, MCP↔CLI workflow, restore safety). Contributor architecture stays in this file and `DEVELOPMENT_PLAN.md`.
+
+### 5.5 `editors/zed`
 
 Thin Zed integration.
 
@@ -237,6 +245,7 @@ Responsibilities:
 - make the binary executable where needed;
 - start or verify the sidecar via a short command such as `ensure-daemon`;
 - open generated Markdown reports or snapshot view files in Zed;
+- optionally register a local-history MCP server for the Agent Panel when that integration surface is used;
 - expose focused commands where the Zed extension API allows it;
 - show clear errors when required capabilities are disabled.
 
@@ -798,7 +807,7 @@ The CLI should support:
 
 ```text
 local-history show <snapshot-id>
-local-history diff <snapshot-id> --with-current
+local-history diff <snapshot-id>
 local-history open <snapshot-id>
 ```
 
@@ -919,7 +928,7 @@ local-history files <project-root> --from <ISO-datetime> --to <ISO-datetime>
 local-history snapshots <project-root> --file <relative-path> --from <ISO-datetime> --to <ISO-datetime>
 
 local-history show <snapshot-id>
-local-history diff <snapshot-id> --with-current
+local-history diff <snapshot-id>
 local-history open <snapshot-id>
 
 local-history restore <snapshot-id>
@@ -1087,7 +1096,7 @@ MVP diff strategy should be simple:
 Commands:
 
 ```text
-local-history diff <snapshot-id> --with-current
+local-history diff <snapshot-id>
 local-history diff <snapshot-id> --with <other-snapshot-id>
 ```
 
@@ -1173,7 +1182,6 @@ MVP should not require:
 - undo restore;
 - retention;
 - JSON output;
-- CLI basics.
 
 ### Phase 2 — Markdown-First UX
 
@@ -1232,6 +1240,7 @@ The sidecar JSON contract should make this possible without changing storage.
 - Can the Zed extension reliably start short helper commands with `process::Command` on all supported platforms?
 - What is the cleanest way to start a long-running sidecar without blocking the extension process?
 - Should the sidecar expose only CLI commands for MVP, or also a local IPC endpoint?
+- **Resolved:** MCP calls `local-history-core` directly; it does not shell out to CLI for normal tool paths.
 - Should generated Markdown include full content previews or only metadata and links?
 - What size limit should be used for Markdown previews?
 - How should numbered restore from the last list expire safely?
@@ -1282,6 +1291,7 @@ The project is successful when:
 - Markdown snapshot files can be opened directly in Zed;
 - hour and 10-minute segment reports are generated correctly;
 - JSON output is stable enough for future clients;
+- human-readable CLI and MCP summaries show timestamps in the local system timezone while JSON and structured MCP fields keep RFC3339 UTC;
 - storage does not grow without bounds;
 - secrets and generated files are not captured accidentally by default as much as reasonably possible;
 - the tool works even if Git history is missing or damaged;
