@@ -324,7 +324,7 @@ fn tool_recent_snapshots(arguments: &Value) -> Result<Value, String> {
 
 fn tool_view_snapshot(arguments: &Value) -> Result<Value, String> {
     let data_dir = data_dir_from_arguments(arguments)?;
-    let snapshot_id = required_snapshot_id(arguments, "snapshot_id")?;
+    let snapshot_id = required_snapshot_id(arguments, "snapshot_id", &data_dir)?;
     let store = LocalHistoryStore::open_for_snapshot_id(data_dir, &snapshot_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
@@ -354,7 +354,7 @@ fn tool_view_snapshot(arguments: &Value) -> Result<Value, String> {
 
 fn tool_restore_snapshot(arguments: &Value) -> Result<Value, String> {
     let data_dir = data_dir_from_arguments(arguments)?;
-    let snapshot_id = required_snapshot_id(arguments, "snapshot_id")?;
+    let snapshot_id = required_snapshot_id(arguments, "snapshot_id", &data_dir)?;
     let store = LocalHistoryStore::open_for_snapshot_id(data_dir, &snapshot_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
@@ -702,8 +702,49 @@ fn data_dir_from_arguments(arguments: &Value) -> Result<PathBuf, String> {
         .unwrap_or_else(default_data_dir))
 }
 
-fn required_snapshot_id(arguments: &Value, key: &str) -> Result<SnapshotId, String> {
-    Ok(SnapshotId::new(required_string(arguments, key)?))
+fn required_snapshot_id(
+    arguments: &Value,
+    key: &str,
+    data_dir: &Path,
+) -> Result<SnapshotId, String> {
+    resolve_snapshot_id(data_dir, required_string(arguments, key)?)
+}
+
+fn resolve_snapshot_id(data_dir: &Path, input: &str) -> Result<SnapshotId, String> {
+    let snapshot_id = SnapshotId::new(input);
+
+    if LocalHistoryStore::open_for_snapshot_id(data_dir, &snapshot_id)
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Ok(snapshot_id);
+    }
+
+    let matches = LocalHistoryStore::find_snapshot_ids_by_prefix(data_dir, input)
+        .map_err(|error| error.to_string())?;
+
+    match matches.as_slice() {
+        [] => Err(format!("snapshot not found: {input}")),
+        [snapshot_id] => Ok(snapshot_id.clone()),
+        _ => Err(ambiguous_snapshot_prefix_error(input, &matches)),
+    }
+}
+
+fn ambiguous_snapshot_prefix_error(prefix: &str, matches: &[SnapshotId]) -> String {
+    let mut message = format!(
+        "snapshot prefix `{prefix}` is ambiguous; use a longer prefix or full snapshot ID:"
+    );
+
+    for snapshot_id in matches.iter().take(10) {
+        message.push_str("\n  ");
+        message.push_str(snapshot_id.as_str());
+    }
+
+    if matches.len() > 10 {
+        message.push_str(&format!("\n  ... {} more matches", matches.len() - 10));
+    }
+
+    message
 }
 
 fn required_string<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -921,13 +962,13 @@ fn tool_local_history_view_snapshot() -> Value {
     json!({
         "name": "local_history_view_snapshot",
         "title": "View Local Snapshot",
-        "description": "Return metadata and a preview for one snapshot by exact snapshot ID.",
+        "description": "Return metadata and a preview for one snapshot by full snapshot ID or unique snapshot ID prefix.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "snapshot_id": {
                     "type": "string",
-                    "description": "Exact local-history snapshot ID."
+                    "description": "Full local-history snapshot ID or unique snapshot ID prefix."
                 },
                 "data_dir": {
                     "type": "string",
@@ -950,13 +991,13 @@ fn tool_local_history_restore_snapshot() -> Value {
     json!({
         "name": "local_history_restore_snapshot",
         "title": "Restore Local Snapshot",
-        "description": "Restore one snapshot by exact snapshot ID. This always creates a safety snapshot first.",
+        "description": "Restore one snapshot by full snapshot ID or unique snapshot ID prefix. This always creates a safety snapshot first.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "snapshot_id": {
                     "type": "string",
-                    "description": "Exact local-history snapshot ID."
+                    "description": "Full local-history snapshot ID or unique snapshot ID prefix."
                 },
                 "data_dir": {
                     "type": "string",
@@ -1180,6 +1221,7 @@ mod tests {
             })
             .expect("snapshot must store");
         fs::write(&live_path, b"current state\n").expect("live file must exist");
+        let snapshot_prefix = &snapshot.id.as_str()[..12];
 
         let view_response = handle_message(json!({
             "jsonrpc": "2.0",
@@ -1188,7 +1230,7 @@ mod tests {
             "params": {
                 "name": "local_history_view_snapshot",
                 "arguments": {
-                    "snapshot_id": snapshot.id.as_str(),
+                    "snapshot_id": snapshot_prefix,
                     "data_dir": base_dir.display().to_string()
                 }
             }
@@ -1206,7 +1248,7 @@ mod tests {
             "params": {
                 "name": "local_history_restore_snapshot",
                 "arguments": {
-                    "snapshot_id": snapshot.id.as_str(),
+                    "snapshot_id": snapshot_prefix,
                     "data_dir": base_dir.display().to_string()
                 }
             }

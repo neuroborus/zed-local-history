@@ -270,7 +270,7 @@ pub fn render_segment_markdown(project_root: &Path, from: &str, to: &str) -> Run
 }
 
 pub fn restore_snapshot(snapshot_id: &str) -> RuntimeResult<Value> {
-    let snapshot_id = SnapshotId::new(snapshot_id.to_string());
+    let snapshot_id = resolve_snapshot_id(snapshot_id)?;
     let store = LocalHistoryStore::open_default_for_snapshot(&snapshot_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
@@ -291,6 +291,43 @@ pub fn restore_snapshot(snapshot_id: &str) -> RuntimeResult<Value> {
         "previous_file_existed": outcome.operation.previous_file_existed,
         "restore_operation_id": outcome.operation.id,
     }))
+}
+
+fn resolve_snapshot_id(input: &str) -> RuntimeResult<SnapshotId> {
+    let snapshot_id = SnapshotId::new(input);
+
+    if LocalHistoryStore::open_default_for_snapshot(&snapshot_id)
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Ok(snapshot_id);
+    }
+
+    let matches = LocalHistoryStore::find_default_snapshot_ids_by_prefix(input)
+        .map_err(|error| error.to_string())?;
+
+    match matches.as_slice() {
+        [] => Err(format!("snapshot not found: {input}")),
+        [snapshot_id] => Ok(snapshot_id.clone()),
+        _ => Err(ambiguous_snapshot_prefix_error(input, &matches)),
+    }
+}
+
+fn ambiguous_snapshot_prefix_error(prefix: &str, matches: &[SnapshotId]) -> String {
+    let mut message = format!(
+        "snapshot prefix `{prefix}` is ambiguous; use a longer prefix or full snapshot ID:"
+    );
+
+    for snapshot_id in matches.iter().take(10) {
+        message.push_str("\n  ");
+        message.push_str(snapshot_id.as_str());
+    }
+
+    if matches.len() > 10 {
+        message.push_str(&format!("\n  ... {} more matches", matches.len() - 10));
+    }
+
+    message
 }
 
 fn watcher_status_value(

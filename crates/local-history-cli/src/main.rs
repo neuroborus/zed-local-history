@@ -13,6 +13,9 @@ use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 
+const DISPLAY_SNAPSHOT_ID_PREFIX_LEN: usize = 12;
+const AMBIGUOUS_SNAPSHOT_ID_SUGGESTION_LIMIT: usize = 10;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "local-history",
@@ -179,7 +182,7 @@ fn run(cli: Cli) -> Result<(), String> {
             Ok(())
         }
         Commands::Snapshot { project_root, file } => snapshot_file(&project_root, &file),
-        Commands::Show { snapshot_id, json } => show_snapshot(&SnapshotId::new(snapshot_id), json),
+        Commands::Show { snapshot_id, json } => show_snapshot(&snapshot_id, json),
         Commands::History { command } => run_history_command(command),
         Commands::Recent {
             project_root,
@@ -363,16 +366,17 @@ fn prune_history(project_root: &Path, json_output: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn show_snapshot(snapshot_id: &SnapshotId, json_output: bool) -> Result<(), String> {
-    let store = LocalHistoryStore::open_default_for_snapshot(snapshot_id)
+fn show_snapshot(snapshot_id_input: &str, json_output: bool) -> Result<(), String> {
+    let snapshot_id = resolve_snapshot_id(snapshot_id_input)?;
+    let store = LocalHistoryStore::open_default_for_snapshot(&snapshot_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
     let snapshot = store
-        .snapshot(snapshot_id)
+        .snapshot(&snapshot_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
     let contents = store
-        .read_snapshot_content(snapshot_id)
+        .read_snapshot_content(&snapshot_id)
         .map_err(|error| error.to_string())?;
     let preview = render_snapshot_preview(&snapshot, &contents);
 
@@ -661,7 +665,7 @@ fn restore_command(
     recent: Option<usize>,
 ) -> Result<(), String> {
     match (snapshot_id, project_root, recent) {
-        (Some(snapshot_id), None, None) => restore_snapshot_by_id(&SnapshotId::new(snapshot_id)),
+        (Some(snapshot_id), None, None) => restore_snapshot_by_id(&snapshot_id),
         (None, Some(project_root), Some(index)) => restore_snapshot_by_recent_index(project_root, index),
         _ => Err(
             "use either `local-history restore <snapshot-id>` or `local-history restore --project-root <path> --recent <index>`"
@@ -670,12 +674,13 @@ fn restore_command(
     }
 }
 
-fn restore_snapshot_by_id(snapshot_id: &SnapshotId) -> Result<(), String> {
-    let store = LocalHistoryStore::open_default_for_snapshot(snapshot_id)
+fn restore_snapshot_by_id(snapshot_id_input: &str) -> Result<(), String> {
+    let snapshot_id = resolve_snapshot_id(snapshot_id_input)?;
+    let store = LocalHistoryStore::open_default_for_snapshot(&snapshot_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
     let outcome = store
-        .restore_snapshot(snapshot_id, &current_timestamp()?)
+        .restore_snapshot(&snapshot_id, &current_timestamp()?)
         .map_err(|error| error.to_string())?;
 
     print_restore_outcome("restored snapshot", &outcome);
@@ -854,6 +859,46 @@ fn current_timestamp() -> Result<String, String> {
         .map_err(|error| format!("failed to format timestamp: {error}"))
 }
 
+fn resolve_snapshot_id(input: &str) -> Result<SnapshotId, String> {
+    let snapshot_id = SnapshotId::new(input);
+
+    if LocalHistoryStore::open_default_for_snapshot(&snapshot_id)
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Ok(snapshot_id);
+    }
+
+    let matches = LocalHistoryStore::find_default_snapshot_ids_by_prefix(input)
+        .map_err(|error| error.to_string())?;
+
+    match matches.as_slice() {
+        [] => Err(format!("snapshot not found: {input}")),
+        [snapshot_id] => Ok(snapshot_id.clone()),
+        _ => Err(ambiguous_snapshot_prefix_error(input, &matches)),
+    }
+}
+
+fn ambiguous_snapshot_prefix_error(prefix: &str, matches: &[SnapshotId]) -> String {
+    let mut message = format!(
+        "snapshot prefix `{prefix}` is ambiguous; use a longer prefix or full snapshot ID:"
+    );
+
+    for snapshot_id in matches.iter().take(AMBIGUOUS_SNAPSHOT_ID_SUGGESTION_LIMIT) {
+        message.push_str("\n  ");
+        message.push_str(snapshot_id.as_str());
+    }
+
+    if matches.len() > AMBIGUOUS_SNAPSHOT_ID_SUGGESTION_LIMIT {
+        message.push_str(&format!(
+            "\n  ... {} more matches",
+            matches.len() - AMBIGUOUS_SNAPSHOT_ID_SUGGESTION_LIMIT
+        ));
+    }
+
+    message
+}
+
 fn human_timestamp(raw: &str) -> String {
     OffsetDateTime::parse(raw, &Rfc3339)
         .ok()
@@ -889,7 +934,7 @@ fn format_recent_line(index: usize, snapshot: &SnapshotRecord) -> String {
 }
 
 fn short_id(value: &str) -> &str {
-    &value[..std::cmp::min(value.len(), 8)]
+    &value[..std::cmp::min(value.len(), DISPLAY_SNAPSHOT_ID_PREFIX_LEN)]
 }
 
 fn render_preview(contents: &[u8]) -> String {
@@ -1078,8 +1123,9 @@ fn confirm(label: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        human_timestamp, render_preview, render_snapshot_preview, resolve_time_filters, Cli,
-        Commands, HistoryCommands, RenderMarkdownCommands, SnapshotFilterArgs,
+        ambiguous_snapshot_prefix_error, format_recent_line, human_timestamp, render_preview,
+        render_snapshot_preview, resolve_time_filters, short_id, Cli, Commands, HistoryCommands,
+        RenderMarkdownCommands, SnapshotFilterArgs,
     };
     use clap::Parser;
     use local_history_core::{ContentHash, ProjectId, SnapshotId, SnapshotKind, SnapshotRecord};
@@ -1326,6 +1372,39 @@ mod tests {
             render_snapshot_preview(&snapshot, &[]),
             "[missing file state]"
         );
+    }
+
+    #[test]
+    fn recent_lines_show_twelve_character_snapshot_prefixes() {
+        let snapshot = SnapshotRecord {
+            id: SnapshotId::new("1234567890abcdef12345678"),
+            project_id: ProjectId::new("project-1"),
+            relative_path: PathBuf::from("src/lib.rs"),
+            blob_hash: ContentHash::new("hash"),
+            size_bytes: 3,
+            timestamp: "2026-05-02T14:18:51Z".to_string(),
+            kind: SnapshotKind::Raw,
+            captures_missing_file: false,
+        };
+
+        let line = format_recent_line(1, &snapshot);
+
+        assert!(line.contains("1234567890ab"));
+        assert!(!line.contains("1234567890abc"));
+        assert_eq!(short_id(snapshot.id.as_str()), "1234567890ab");
+    }
+
+    #[test]
+    fn ambiguous_snapshot_prefix_error_lists_full_matching_ids() {
+        let matches = vec![
+            SnapshotId::new("abcdef1234567890abcdef12"),
+            SnapshotId::new("abcdef999999999999999999"),
+        ];
+        let message = ambiguous_snapshot_prefix_error("abcdef", &matches);
+
+        assert!(message.contains("snapshot prefix `abcdef` is ambiguous"));
+        assert!(message.contains("abcdef1234567890abcdef12"));
+        assert!(message.contains("abcdef999999999999999999"));
     }
 
     #[test]

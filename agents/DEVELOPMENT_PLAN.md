@@ -1252,6 +1252,7 @@ Because the sidecar is editor-independent, support can be added for:
 - [x] `recent --limit 10` works.
 - [x] Recent list is numbered.
 - [x] Restore by snapshot ID works.
+- [x] Restore/show by unique snapshot ID prefix works.
 - [x] Restore by recent-list number works.
 - [x] Pagination works.
 - [x] Filters by file/time work.

@@ -160,6 +160,12 @@ impl LocalHistoryStore {
         Self::open_for_snapshot_id(default_data_dir(), snapshot_id)
     }
 
+    pub fn find_default_snapshot_ids_by_prefix(
+        prefix: &str,
+    ) -> Result<Vec<SnapshotId>, StorageError> {
+        Self::find_snapshot_ids_by_prefix(default_data_dir(), prefix)
+    }
+
     pub fn open(
         base_data_dir: impl AsRef<Path>,
         project_root: impl AsRef<Path>,
@@ -238,6 +244,51 @@ impl LocalHistoryStore {
         }
 
         Ok(None)
+    }
+
+    pub fn find_snapshot_ids_by_prefix(
+        base_data_dir: impl AsRef<Path>,
+        prefix: &str,
+    ) -> Result<Vec<SnapshotId>, StorageError> {
+        let base_data_dir = base_data_dir.as_ref();
+        let projects_dir = base_data_dir.join("projects");
+
+        if !projects_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut matches = BTreeSet::new();
+
+        for entry in fs::read_dir(&projects_dir)? {
+            let entry = entry?;
+
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+
+            let database_path = entry.path().join("metadata.sqlite");
+
+            if !database_path.is_file() {
+                continue;
+            }
+
+            let connection = Connection::open(&database_path)?;
+            let mut statement = connection.prepare(
+                "SELECT id
+                 FROM snapshots
+                 WHERE substr(id, 1, ?2) = ?1
+                 ORDER BY id",
+            )?;
+            let rows = statement.query_map(params![prefix, prefix.len()], |row| {
+                Ok(SnapshotId::new(row.get::<_, String>(0)?))
+            })?;
+
+            for row in rows {
+                matches.insert(row?.as_str().to_string());
+            }
+        }
+
+        Ok(matches.into_iter().map(SnapshotId::new).collect())
     }
 
     pub fn project(&self) -> &ProjectRecord {
@@ -2934,6 +2985,55 @@ mod tests {
             located.project().root,
             super::normalize_project_root(&project_root)
         );
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn finds_snapshot_ids_by_prefix_across_projects() {
+        let (base_dir, first_project_root) = create_test_roots("prefix");
+        let second_project_root = base_dir
+            .parent()
+            .expect("test root parent must exist")
+            .join("second-project");
+        fs::create_dir_all(&second_project_root).expect("second project must exist");
+
+        let first_store =
+            LocalHistoryStore::open(&base_dir, first_project_root).expect("first store must open");
+        let first_snapshot = first_store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/first.rs"),
+                contents: b"first".to_vec(),
+                timestamp: "2026-05-02T14:25:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("first snapshot must store");
+
+        let second_store = LocalHistoryStore::open(&base_dir, &second_project_root)
+            .expect("second store must open");
+        let second_snapshot = second_store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/second.rs"),
+                contents: b"second".to_vec(),
+                timestamp: "2026-05-02T14:26:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("second snapshot must store");
+
+        let first_prefix = &first_snapshot.id.as_str()[..12];
+        let exact_matches = LocalHistoryStore::find_snapshot_ids_by_prefix(&base_dir, first_prefix)
+            .expect("prefix lookup must work");
+        assert_eq!(exact_matches, vec![first_snapshot.id.clone()]);
+
+        let all_matches = LocalHistoryStore::find_snapshot_ids_by_prefix(&base_dir, "")
+            .expect("empty prefix lookup must work");
+        assert_eq!(all_matches.len(), 2);
+        assert!(all_matches.contains(&first_snapshot.id));
+        assert!(all_matches.contains(&second_snapshot.id));
 
         cleanup_test_roots(&base_dir);
     }

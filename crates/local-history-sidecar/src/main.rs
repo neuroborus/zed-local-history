@@ -315,7 +315,7 @@ Usage:
   local-history-sidecar render-markdown hour <project-root> --hour <ISO-hour>
   local-history-sidecar render-markdown segment-at <project-root> --at <ISO-datetime>
   local-history-sidecar render-markdown segment <project-root> --from <ISO-datetime> --to <ISO-datetime>
-  local-history-sidecar restore <snapshot-id>
+  local-history-sidecar restore <snapshot-id-or-unique-prefix>
 "
     );
 }

@@ -94,10 +94,16 @@ Use this path when testing the extension from this repository.
    local-history recent /tmp/lh-zed-manual
    ```
 
-   Restore by exact snapshot ID:
+   Restore by full snapshot ID or unique snapshot ID prefix:
 
    ```bash
-   local-history restore <snapshot-id>
+   local-history restore <snapshot-id-or-unique-prefix>
+   ```
+
+   Or restore directly from the latest list number:
+
+   ```bash
+   local-history restore --project-root /tmp/lh-zed-manual --recent 1
    ```
 
    Undo the latest restore:
@@ -112,7 +118,7 @@ Use this path when testing the extension from this repository.
 - keeps snapshot metadata in SQLite and stores snapshot contents as compressed content-addressed blobs;
 - groups raw snapshots by hour and fixed 10-minute windows;
 - generates filesystem-browsable Markdown history under an external `view/` directory;
-- restores an exact snapshot by ID or by recent-list number;
+- restores an exact snapshot by full ID, unique ID prefix, or recent-list number;
 - always creates a safety snapshot before restore;
 - can undo the last restore;
 - prunes old or excess history while preserving the latest restore/undo chain needed for recovery;
@@ -280,6 +286,8 @@ cargo run -p local-history-cli -- list . --page 1 --page-size 20 --file src/lib.
 Important behavior:
 
 - `recent` shows raw user snapshots only;
+- human tables show compact snapshot ID prefixes, while `--json` includes full IDs;
+- `show` and `restore` accept a full snapshot ID or any unique snapshot ID prefix;
 - safety snapshots are intentionally excluded from normal recent numbering;
 - `list` can include filtered or paginated snapshot views;
 - `recent`, `list`, `show`, `status`, and `safety-list` support `--json`.
@@ -289,17 +297,17 @@ Important behavior:
 Show a stored snapshot:
 
 ```bash
-cargo run -p local-history-cli -- show <snapshot-id>
+cargo run -p local-history-cli -- show <snapshot-id-or-unique-prefix>
 ```
 
 This resolves the owning project automatically from external storage.
 
 ### 5. Restore safely
 
-Restore by exact snapshot ID:
+Restore by full snapshot ID or unique snapshot ID prefix:
 
 ```bash
-cargo run -p local-history-cli -- restore <snapshot-id>
+cargo run -p local-history-cli -- restore <snapshot-id-or-unique-prefix>
 ```
 
 Restore by recent-list position:
@@ -425,7 +433,7 @@ Pruning also:
 
 ```bash
 cargo run -p local-history-cli -- snapshot <project-root> --file <relative-path>
-cargo run -p local-history-cli -- restore <snapshot-id>
+cargo run -p local-history-cli -- restore <snapshot-id-or-unique-prefix>
 cargo run -p local-history-cli -- restore --project-root <project-root> --recent <index>
 cargo run -p local-history-cli -- undo-restore <project-root>
 cargo run -p local-history-cli -- restore-last-safety <project-root>
@@ -473,7 +481,7 @@ cargo run -p local-history-sidecar -- render-markdown previous-hour <project-roo
 cargo run -p local-history-sidecar -- render-markdown current-segment <project-root>
 cargo run -p local-history-sidecar -- render-markdown hour <project-root> --hour <YYYY-MM-DDTHH>
 cargo run -p local-history-sidecar -- render-markdown segment-at <project-root> --at <rfc3339>
-cargo run -p local-history-sidecar -- restore <snapshot-id>
+cargo run -p local-history-sidecar -- restore <snapshot-id-or-unique-prefix>
 ```
 
 ## MCP server
@@ -504,7 +512,7 @@ cargo run -p local-history-mcp -- --help
 Current tool contract:
 
 - most tools require explicit `project_root`;
-- snapshot view and restore work by exact `snapshot_id`;
+- snapshot view and restore work by full `snapshot_id` or any unique snapshot ID prefix;
 - all tools accept optional `data_dir` when you want to use a non-default local-history storage base directory;
 - `local_history_restore_snapshot` remains safety-first and creates a safety snapshot before writing the live file;
 - `local_history_diff_snapshot` does not exist yet because the project still has no dedicated diff surface.
@@ -601,7 +609,7 @@ These are extension slash commands for Zed surfaces that support extension slash
 - `/local-history-previous-hour`
 - `/local-history-hour <YYYY-MM-DDTHH>`
 - `/local-history-segment <YYYY-MM-DDTHH:MM:SSZ>`
-- `/local-history-restore <snapshot-id>`
+- `/local-history-restore <snapshot-id-or-unique-prefix>`
 
 ### Important Zed limitation
 

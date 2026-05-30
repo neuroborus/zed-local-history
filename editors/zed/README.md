@@ -43,7 +43,7 @@ These are extension slash commands for Zed surfaces that support extension slash
 - `/local-history-previous-hour`
 - `/local-history-hour <YYYY-MM-DDTHH>`
 - `/local-history-segment <YYYY-MM-DDTHH:MM:SSZ>`
-- `/local-history-restore <snapshot-id>`
+- `/local-history-restore <snapshot-id-or-unique-prefix>`
 
 Current behavior:
 
@@ -51,7 +51,7 @@ Current behavior:
 - `start-watcher` calls `local-history-sidecar ensure-daemon <project-root>`
 - `view` exposes the generated Markdown view root path
 - `current-hour`, `current-segment`, `previous-hour`, `hour`, and `segment` call sidecar Markdown render commands and return the generated file path
-- `restore` calls `local-history-sidecar restore <snapshot-id>`
+- `restore` calls `local-history-sidecar restore <snapshot-id-or-unique-prefix>`
 - the extension probes `local-history-sidecar version` before use; if a `PATH` binary is missing or too old, it falls back to the cached/downloaded release asset for the current extension version
 - tagged releases publish `SHA256SUMS.txt` alongside the archives that the extension bootstrap relies on
 - release bootstrap currently has explicit asset mappings for macOS `x86_64` / `aarch64`, Linux `x86_64` / `aarch64`, and Windows `x86_64` / `aarch64`

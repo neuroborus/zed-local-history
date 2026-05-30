@@ -4,6 +4,7 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-30
 
+- Closed the Stage 6.5 snapshot-ID UX gap. Stored snapshot IDs remain opaque, human tables now use 12-character prefixes, and CLI/sidecar/MCP restore paths resolve full IDs or unique prefixes with explicit ambiguity errors. JSON, Markdown, logs, and structured MCP output remain the places for full durable IDs.
 - Clarified the real Zed dev quickstart after live manual testing. The root README now starts with the current Zed/Rust setup path, the required `wasm32-wasip2` target, the shell launch form that exposes `rustup` and local debug binaries to Zed, and the Agent Panel nuance that `/local-history-*` extension slash commands are not Agent commands.
 - Wired the Zed extension's first MCP context server registration. `extension.toml` now declares `[context_servers.local-history]`, and the extension returns a `local-history-mcp` command for Agent Panel tool use when that binary is available in `PATH`. Packaged MCP bootstrap remains a release-validation item; the dev path now matches Zed's MCP extension model instead of requiring only manual `context_servers` settings.
 
