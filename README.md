@@ -4,115 +4,58 @@ Filesystem-first local history for Zed.
 
 This project stores previous saved states of files outside the user repository, exposes them through a native CLI, a native sidecar watcher, generated Markdown history views, a thin Zed extension, and an additive MCP stdio server. The recovery path does not depend on Git, stash, or a custom editor UI.
 
-## Quickstart: local Zed dev run
+## How To CLI
 
-Use this path when testing the extension from this repository.
+Use `local-history` for normal terminal workflows. Use `local-history-sidecar` only for watcher startup/status and Zed-facing render helpers.
 
-1. Use a current Zed build.
+```bash
+# Start and inspect the watcher for a project.
+local-history-sidecar ensure-daemon /path/to/project
+local-history-sidecar status /path/to/project
 
-   Zed Stable 1.4.4 or newer is the current acceptance baseline. Check:
+# List the latest raw snapshots.
+local-history recent /path/to/project
 
-   ```bash
-   zed --version
-   ```
+# Get full snapshot IDs and machine-readable metadata.
+local-history recent /path/to/project --json
 
-2. Prepare Rust for the Zed extension.
+# Preview one snapshot before restoring.
+local-history show <snapshot-id-or-unique-prefix>
 
-   The native workspace uses Rust 1.75.0, but the Zed extension builds with stable Rust and `wasm32-wasip2`.
+# Browse snapshots interactively in the terminal.
+local-history browse /path/to/project
 
-   ```bash
-   rustup +stable target add wasm32-wasip2
-   cargo run -p xtask -- full-ci
-   ```
+# Restore from the latest list by number.
+local-history restore --project-root /path/to/project --recent 1
 
-3. Build the local binaries used during dev testing.
+# Restore by full snapshot ID or any unique snapshot ID prefix.
+local-history restore <snapshot-id-or-unique-prefix>
 
-   ```bash
-   cargo build -p local-history-sidecar -p local-history-cli -p local-history-mcp
-   ```
+# Undo the latest restore.
+local-history undo-restore /path/to/project
 
-4. Create a clean test project and launch Zed from the same shell.
+# Create a manual snapshot of one file.
+local-history snapshot /path/to/project --file relative/path.txt
 
-   ```bash
-   mkdir -p /tmp/lh-zed-manual
-   printf 'v1\n' > /tmp/lh-zed-manual/note.txt
+# Generate Markdown history for a specific UTC hour.
+local-history render-markdown hour /path/to/project --hour 2026-05-30T18
 
-   RUSTUP_TOOLCHAIN=stable \
-   PATH="$HOME/.cargo/bin:$PWD/target/debug:$PATH" \
-   zed --foreground /tmp/lh-zed-manual
-   ```
+# Print the generated Markdown view root.
+local-history view-root /path/to/project
 
-   Launching from the shell matters for dev testing: Zed must see `rustup`, the stable extension toolchain, and the local `target/debug` binaries in `PATH`. Keep the `PATH=...` assignment on one shell line. If `command -v local-history-sidecar` or `command -v local-history-mcp` prints nothing in that shell, the path was not exported correctly.
+# Apply the default retention policy and rebuild the Markdown view.
+local-history prune /path/to/project
+```
 
-   Local binaries are a dev shortcut. In a packaged install, the extension resolves, downloads, and caches matching release binaries for both the sidecar and MCP server.
+Typical loop:
 
-5. Install the extension in Zed.
+1. Start the watcher once with `local-history-sidecar ensure-daemon`.
+2. Edit and save files normally.
+3. Use `local-history recent` to find a recovery point.
+4. Prefer `local-history restore --project-root <project> --recent <n>` for quick restores from the current list.
+5. Use `undo-restore` immediately if the restore was not the one you wanted.
 
-   Open Extensions, choose `Install Dev Extension`, and select:
-
-   ```text
-   editors/zed
-   ```
-
-6. Start the watcher.
-
-   From a terminal:
-
-   ```bash
-   local-history-sidecar ensure-daemon /tmp/lh-zed-manual
-   local-history-sidecar status /tmp/lh-zed-manual
-   ```
-
-   If you are using a Zed surface that supports extension slash commands, `/local-history-start-watcher` and `/local-history-status` call the same sidecar paths.
-
-7. Use the Zed Agent Panel through MCP, not slash commands.
-
-   The new Agent Panel treats text starting with `/` as Agent commands. Extension slash commands such as `/local-history-status` are not Agent commands, so the Agent may report that they are unrecognized.
-
-   This extension registers the `local-history` MCP context server for Agent use. Ask in natural language, for example:
-
-   ```text
-   Use local-history to show status for /tmp/lh-zed-manual.
-   ```
-
-   If Zed does not start the extension-managed context server, add the MCP server manually in Zed settings:
-
-   ```json
-   {
-     "context_servers": {
-       "local-history": {
-         "command": "local-history-mcp",
-         "args": []
-       }
-     }
-   }
-   ```
-
-8. Capture and restore.
-
-   Edit and save `/tmp/lh-zed-manual/note.txt`, then inspect snapshots:
-
-   ```bash
-   local-history recent /tmp/lh-zed-manual
-   ```
-
-   Restore by full snapshot ID or unique snapshot ID prefix:
-
-   ```bash
-   local-history restore <snapshot-id-or-unique-prefix>
-   ```
-
-   Or restore directly from the latest list number:
-
-   ```bash
-   local-history restore --project-root /tmp/lh-zed-manual --recent 1
-   ```
-
-   Undo the latest restore:
-
-   ```bash
-   local-history undo-restore /tmp/lh-zed-manual
-   ```
+For contributor setup and manual Zed validation, use [agents/ZED_MANUAL_TESTING.md](agents/ZED_MANUAL_TESTING.md).
 
 ## What it does
 
@@ -147,87 +90,54 @@ Use this path when testing the extension from this repository.
 5. Markdown generation reads from stored raw snapshots and writes history pages into external storage. Generated Markdown is not the source of truth.
 6. The MCP server maps tool calls onto the same storage and restore paths instead of becoming a second source of business logic.
 
-## Requirements
-
-### Native workspace
-
-- Rust `1.75.0` for the root workspace
-- `cargo`, `rustfmt`, and `clippy`
-
-### Zed extension package
-
-- Rust installed through `rustup`
-- a newer toolchain for `wasm32-wasip2`
-- the extension keeps its own toolchain in `editors/zed/rust-toolchain.toml`
-
-## Build and validation
-
-Run native workspace checks:
-
-```bash
-cargo run -p xtask -- ci
-```
-
-Run Zed extension checks:
-
-```bash
-cargo run -p xtask -- zed-ci
-```
-
-Run the full repository checks:
-
-```bash
-cargo run -p xtask -- full-ci
-```
-
 ## Quick start
 
 Start the watcher for the current project:
 
 ```bash
-cargo run -p local-history-sidecar -- ensure-daemon .
+local-history-sidecar ensure-daemon .
 ```
 
 Check watcher and storage status:
 
 ```bash
-cargo run -p local-history-sidecar -- status .
+local-history-sidecar status .
 ```
 
 Create a manual snapshot of one file:
 
 ```bash
-cargo run -p local-history-cli -- snapshot . --file README.md
+local-history snapshot . --file README.md
 ```
 
 List the latest raw snapshots:
 
 ```bash
-cargo run -p local-history-cli -- recent .
+local-history recent .
 ```
 
 Restore the newest raw snapshot from the recent list:
 
 ```bash
-cargo run -p local-history-cli -- restore --project-root . --recent 1
+local-history restore --project-root . --recent 1
 ```
 
 Undo that restore:
 
 ```bash
-cargo run -p local-history-cli -- undo-restore .
+local-history undo-restore .
 ```
 
-Generate the current hour Markdown view:
+Generate an hour Markdown view:
 
 ```bash
-cargo run -p local-history-cli -- render-markdown hour . --hour 2026-05-03T14
+local-history render-markdown hour . --hour 2026-05-03T14
 ```
 
 Start the MCP stdio server:
 
 ```bash
-cargo run -p local-history-mcp
+local-history-mcp
 ```
 
 ## Common workflows
@@ -237,13 +147,13 @@ cargo run -p local-history-mcp
 Start or verify the watcher:
 
 ```bash
-cargo run -p local-history-sidecar -- ensure-daemon /absolute/path/to/project
+local-history-sidecar ensure-daemon /absolute/path/to/project
 ```
 
 Read status:
 
 ```bash
-cargo run -p local-history-sidecar -- status /absolute/path/to/project
+local-history-sidecar status /absolute/path/to/project
 ```
 
 Current watcher behavior:
@@ -260,7 +170,7 @@ Current watcher behavior:
 Manual snapshots are useful for precise experiments or before risky edits:
 
 ```bash
-cargo run -p local-history-cli -- snapshot . --file src/lib.rs
+local-history snapshot . --file src/lib.rs
 ```
 
 Manual snapshotting is exact and per-file. It does not create a project-wide checkpoint.
@@ -270,19 +180,19 @@ Manual snapshotting is exact and per-file. It does not create a project-wide che
 Basic recent list:
 
 ```bash
-cargo run -p local-history-cli -- recent .
+local-history recent .
 ```
 
 Recent list with JSON:
 
 ```bash
-cargo run -p local-history-cli -- recent . --json
+local-history recent . --json
 ```
 
 Paginated list with filters:
 
 ```bash
-cargo run -p local-history-cli -- list . --page 1 --page-size 20 --file src/lib.rs --from 2026-05-03T10:00:00Z --to 2026-05-03T11:00:00Z
+local-history list . --page 1 --page-size 20 --file src/lib.rs --from 2026-05-03T10:00:00Z --to 2026-05-03T11:00:00Z
 ```
 
 Important behavior:
@@ -299,7 +209,7 @@ Important behavior:
 Show a stored snapshot:
 
 ```bash
-cargo run -p local-history-cli -- show <snapshot-id-or-unique-prefix>
+local-history show <snapshot-id-or-unique-prefix>
 ```
 
 This resolves the owning project automatically from external storage.
@@ -309,13 +219,13 @@ This resolves the owning project automatically from external storage.
 Restore by full snapshot ID or unique snapshot ID prefix:
 
 ```bash
-cargo run -p local-history-cli -- restore <snapshot-id-or-unique-prefix>
+local-history restore <snapshot-id-or-unique-prefix>
 ```
 
 Restore by recent-list position:
 
 ```bash
-cargo run -p local-history-cli -- restore --project-root . --recent 1
+local-history restore --project-root . --recent 1
 ```
 
 What restore guarantees:
@@ -328,25 +238,25 @@ What restore guarantees:
 Inspect safety snapshots:
 
 ```bash
-cargo run -p local-history-cli -- safety-list .
+local-history safety-list .
 ```
 
 Undo the latest restore:
 
 ```bash
-cargo run -p local-history-cli -- undo-restore .
+local-history undo-restore .
 ```
 
 Explicitly restore the newest safety snapshot:
 
 ```bash
-cargo run -p local-history-cli -- restore-last-safety .
+local-history restore-last-safety .
 ```
 
 ### 6. Use interactive browse mode
 
 ```bash
-cargo run -p local-history-cli -- browse .
+local-history browse .
 ```
 
 Current browse behavior:
@@ -360,13 +270,13 @@ Current browse behavior:
 Hour history:
 
 ```bash
-cargo run -p local-history-cli -- history hour . --hour 2026-05-03T14
+local-history history hour . --hour 2026-05-03T14
 ```
 
 10-minute segment history:
 
 ```bash
-cargo run -p local-history-cli -- history segment . --from 2026-05-03T14:10:00Z --to 2026-05-03T14:20:00Z
+local-history history segment . --from 2026-05-03T14:10:00Z --to 2026-05-03T14:20:00Z
 ```
 
 Grouping rules:
@@ -380,25 +290,25 @@ Grouping rules:
 Find the generated view root:
 
 ```bash
-cargo run -p local-history-cli -- view-root .
+local-history view-root .
 ```
 
 Generate one hour:
 
 ```bash
-cargo run -p local-history-cli -- render-markdown hour . --hour 2026-05-03T14
+local-history render-markdown hour . --hour 2026-05-03T14
 ```
 
 Generate one fixed 10-minute segment:
 
 ```bash
-cargo run -p local-history-cli -- render-markdown segment . --from 2026-05-03T14:10:00Z --to 2026-05-03T14:20:00Z
+local-history render-markdown segment . --from 2026-05-03T14:10:00Z --to 2026-05-03T14:20:00Z
 ```
 
 Rebuild the entire Markdown tree:
 
 ```bash
-cargo run -p local-history-cli -- rebuild-markdown-view .
+local-history rebuild-markdown-view .
 ```
 
 Generated Markdown currently includes:
@@ -413,7 +323,7 @@ Generated Markdown currently includes:
 Apply retention rules:
 
 ```bash
-cargo run -p local-history-cli -- prune .
+local-history prune .
 ```
 
 Current default retention policy:
@@ -434,56 +344,56 @@ Pruning also:
 ### Snapshot and restore
 
 ```bash
-cargo run -p local-history-cli -- snapshot <project-root> --file <relative-path>
-cargo run -p local-history-cli -- restore <snapshot-id-or-unique-prefix>
-cargo run -p local-history-cli -- restore --project-root <project-root> --recent <index>
-cargo run -p local-history-cli -- undo-restore <project-root>
-cargo run -p local-history-cli -- restore-last-safety <project-root>
-cargo run -p local-history-cli -- safety-list <project-root>
+local-history snapshot <project-root> --file <relative-path>
+local-history restore <snapshot-id-or-unique-prefix>
+local-history restore --project-root <project-root> --recent <index>
+local-history undo-restore <project-root>
+local-history restore-last-safety <project-root>
+local-history safety-list <project-root>
 ```
 
 ### Query and browse
 
 ```bash
-cargo run -p local-history-cli -- recent <project-root> [--json]
-cargo run -p local-history-cli -- list <project-root> --page <n> --page-size <n> [--file <relative-path>] [--from <rfc3339>] [--to <rfc3339>] [--hour <YYYY-MM-DDTHH>] [--json]
-cargo run -p local-history-cli -- show <snapshot-id>
-cargo run -p local-history-cli -- browse <project-root>
+local-history recent <project-root> [--json]
+local-history list <project-root> --page <n> --page-size <n> [--file <relative-path>] [--from <rfc3339>] [--to <rfc3339>] [--hour <YYYY-MM-DDTHH>] [--json]
+local-history show <snapshot-id>
+local-history browse <project-root>
 ```
 
 ### Grouped history and Markdown
 
 ```bash
-cargo run -p local-history-cli -- history hour <project-root> --hour <YYYY-MM-DDTHH>
-cargo run -p local-history-cli -- history segment <project-root> --from <rfc3339> --to <rfc3339>
-cargo run -p local-history-cli -- view-root <project-root>
-cargo run -p local-history-cli -- render-markdown hour <project-root> --hour <YYYY-MM-DDTHH>
-cargo run -p local-history-cli -- render-markdown segment <project-root> --from <rfc3339> --to <rfc3339>
-cargo run -p local-history-cli -- rebuild-markdown-view <project-root>
+local-history history hour <project-root> --hour <YYYY-MM-DDTHH>
+local-history history segment <project-root> --from <rfc3339> --to <rfc3339>
+local-history view-root <project-root>
+local-history render-markdown hour <project-root> --hour <YYYY-MM-DDTHH>
+local-history render-markdown segment <project-root> --from <rfc3339> --to <rfc3339>
+local-history rebuild-markdown-view <project-root>
 ```
 
 ### Retention and maintenance
 
 ```bash
-cargo run -p local-history-cli -- status <project-root> [--json]
-cargo run -p local-history-cli -- prune <project-root> [--json]
+local-history status <project-root> [--json]
+local-history prune <project-root> [--json]
 ```
 
 ## Sidecar command reference
 
 ```bash
-cargo run -p local-history-sidecar -- health
-cargo run -p local-history-sidecar -- version
-cargo run -p local-history-sidecar -- status <project-root>
-cargo run -p local-history-sidecar -- ensure-daemon <project-root>
-cargo run -p local-history-sidecar -- watch <project-root>
-cargo run -p local-history-sidecar -- view-root <project-root>
-cargo run -p local-history-sidecar -- render-markdown current-hour <project-root>
-cargo run -p local-history-sidecar -- render-markdown previous-hour <project-root>
-cargo run -p local-history-sidecar -- render-markdown current-segment <project-root>
-cargo run -p local-history-sidecar -- render-markdown hour <project-root> --hour <YYYY-MM-DDTHH>
-cargo run -p local-history-sidecar -- render-markdown segment-at <project-root> --at <rfc3339>
-cargo run -p local-history-sidecar -- restore <snapshot-id-or-unique-prefix>
+local-history-sidecar health
+local-history-sidecar version
+local-history-sidecar status <project-root>
+local-history-sidecar ensure-daemon <project-root>
+local-history-sidecar watch <project-root>
+local-history-sidecar view-root <project-root>
+local-history-sidecar render-markdown current-hour <project-root>
+local-history-sidecar render-markdown previous-hour <project-root>
+local-history-sidecar render-markdown current-segment <project-root>
+local-history-sidecar render-markdown hour <project-root> --hour <YYYY-MM-DDTHH>
+local-history-sidecar render-markdown segment-at <project-root> --at <rfc3339>
+local-history-sidecar restore <snapshot-id-or-unique-prefix>
 ```
 
 ## MCP server
@@ -493,13 +403,13 @@ cargo run -p local-history-sidecar -- restore <snapshot-id-or-unique-prefix>
 Run it directly:
 
 ```bash
-cargo run -p local-history-mcp
+local-history-mcp
 ```
 
 Local usage help:
 
 ```bash
-cargo run -p local-history-mcp -- --help
+local-history-mcp --help
 ```
 
 ### Current MCP tools
@@ -523,7 +433,7 @@ Current tool contract:
 
 The Zed Agent Panel uses MCP tools, not extension slash commands.
 
-When the extension is installed, it registers the `local-history` context server automatically. For dev installs it prefers `local-history-mcp` from `PATH`; otherwise it downloads and caches the matching release MCP binary, the same way the sidecar bootstrap works.
+When the extension is installed, it registers the `local-history` context server automatically and resolves the matching MCP binary for Agent Panel use.
 
 Ask the Agent in natural language:
 
@@ -531,26 +441,18 @@ Ask the Agent in natural language:
 Use local-history to show status for /absolute/path/to/project.
 ```
 
-If you want to configure the MCP server manually instead, build the MCP binary:
-
-```bash
-cargo build -p local-history-mcp
-```
-
-Then register it in Zed settings:
+If you want to configure the MCP server manually instead, point Zed at an installed or unpacked `local-history-mcp` executable:
 
 ```json
 {
   "context_servers": {
     "local-history": {
-      "command": "/absolute/path/to/zed-local-history/target/debug/local-history-mcp",
+      "command": "/absolute/path/to/local-history-mcp",
       "args": []
     }
   }
 }
 ```
-
-If you prefer packaged binaries over development binaries, point `command` at the installed or unpacked `local-history-mcp` executable instead.
 
 Current release contract:
 
@@ -577,28 +479,13 @@ Examples of requests that map well to the current tool surface:
 
 ## Zed usage
 
-### Install as a dev extension
-
-From Zed:
-
-1. open the extensions page;
-2. choose `Install Dev Extension`;
-3. select `editors/zed`.
-
-Then validate from the repository root:
-
-```bash
-cargo run -p xtask -- zed-ci
-```
-
 ### What the extension does
 
-- resolves `local-history-sidecar` from `PATH` for development workflows;
-- otherwise downloads and caches the matching GitHub release asset;
+- resolves, downloads, and caches the matching `local-history-sidecar` release asset;
 - verifies sidecar version compatibility before use;
 - runs focused sidecar commands from slash handlers;
 - registers the `local-history` MCP context server for Agent Panel tool use;
-- resolves `local-history-mcp` from `PATH` for development workflows, otherwise downloads and caches the matching GitHub release asset;
+- resolves, downloads, and caches the matching `local-history-mcp` release asset;
 - verifies MCP binary version compatibility before launching the context server.
 
 ### Current slash commands
@@ -698,7 +585,7 @@ Delete all history by removing the whole base `local-history` directory.
 
 ### Sidecar not starting
 
-- run `cargo run -p local-history-sidecar -- status <project-root>`;
+- run `local-history-sidecar status <project-root>`;
 - inspect `projects/<project-id>/logs/watcher.log`;
 - inspect `projects/<project-id>/logs/watcher-status.json`.
 
@@ -710,12 +597,12 @@ Delete all history by removing the whole base `local-history` directory.
 
 ### Storage too large
 
-- run `cargo run -p local-history-cli -- status <project-root>`;
-- run `cargo run -p local-history-cli -- prune <project-root>`.
+- run `local-history status <project-root>`;
+- run `local-history prune <project-root>`.
 
 ### Markdown not updating
 
-- run `cargo run -p local-history-cli -- rebuild-markdown-view <project-root>`;
+- run `local-history rebuild-markdown-view <project-root>`;
 - confirm raw snapshots actually exist with `recent` or `list`.
 
 ### Restore failure
@@ -770,35 +657,35 @@ zed-local-history/
 Start the watcher:
 
 ```bash
-cargo run -p local-history-sidecar -- ensure-daemon .
+local-history-sidecar ensure-daemon .
 ```
 
 Edit and save `src/lib.rs`, then inspect the newest raw snapshot:
 
 ```bash
-cargo run -p local-history-cli -- recent .
+local-history recent .
 ```
 
 Restore the first item from the recent list:
 
 ```bash
-cargo run -p local-history-cli -- restore --project-root . --recent 1
+local-history restore --project-root . --recent 1
 ```
 
 If the restore was wrong, undo it:
 
 ```bash
-cargo run -p local-history-cli -- undo-restore .
+local-history undo-restore .
 ```
 
 Generate an hour view for browsing:
 
 ```bash
-cargo run -p local-history-cli -- render-markdown hour . --hour 2026-05-03T14
+local-history render-markdown hour . --hour 2026-05-03T14
 ```
 
 Look up the generated view root:
 
 ```bash
-cargo run -p local-history-cli -- view-root .
+local-history view-root .
 ```

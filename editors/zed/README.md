@@ -10,7 +10,7 @@ The project goals are intentionally filesystem-first:
 - the CLI and generated Markdown must work without Zed;
 - editor integration should stay small and replaceable.
 
-The current Zed extension is no longer pure placeholder text, but it still stays intentionally thin.
+The current Zed extension has real sidecar and MCP behavior while staying intentionally thin.
 
 Zed's documented MCP server support also creates a second integration route: the extension registers the implemented `local-history-mcp` server as the `local-history` context server for the Zed Agent Panel. Users may still connect it directly through their `context_servers` settings when they want an explicit binary path. That path is additive to the current CLI/Markdown workflow.
 
@@ -20,13 +20,13 @@ Zed's documented MCP server support also creates a second integration route: the
 - `src/lib.rs` resolves `local-history-sidecar` and `local-history-mcp` from `PATH` for dev installs, otherwise downloads matching GitHub release assets into the extension work directory, verifies binary version compatibility, calls real sidecar commands from slash-command handlers, and starts the MCP server for Agent Panel tool use.
 - The extension is kept outside the root workspace because it follows Zed's WebAssembly packaging model and will evolve on its own cadence.
 
-## Planned responsibilities
+## Responsibilities
 
 - detect platform and architecture;
 - locate or download the correct sidecar and MCP release artifacts;
 - make downloaded binaries executable where needed;
 - run focused sidecar commands such as `ensure-daemon`, `status`, and Markdown view lookups;
-- expose the most useful recovery flows through Zed-supported extension surfaces.
+- expose the most useful recovery flows through Zed-supported extension surfaces;
 - register the existing `local-history-mcp` server for Agent Panel MCP tool use.
 
 The native sidecar now already exposes real JSON `health`, `status`, `watch`, and `ensure-daemon` behavior. The extension intentionally keeps direct slash-command output small while Agent Panel functionality goes through MCP tools.
@@ -70,7 +70,7 @@ The current MCP server can also coexist with these slash commands through direct
 
 This package carries its own toolchain file so the extension can target current Zed requirements without forcing the root native workspace to upgrade in lockstep.
 
-When you start implementing the real extension logic, validate it from this directory:
+For full manual validation, use [agents/ZED_MANUAL_TESTING.md](../../agents/ZED_MANUAL_TESTING.md). For a local extension compile check:
 
 ```bash
 cd editors/zed

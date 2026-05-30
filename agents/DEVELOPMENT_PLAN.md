@@ -1,8 +1,4 @@
-# DEVELOPMENT_PLAN.md
-
 # Local History for Zed — Development Plan
-
-_Last updated: 2026-05-02_
 
 ## Goal
 
@@ -1047,6 +1043,32 @@ Local implementation status:
 - implemented in the Zed extension through the same release-bootstrap model as the sidecar;
 - release workflow now emits fixed-name MCP-only archives for every supported platform;
 - live tagged-release validation is still tracked under the external validation plan.
+
+### 11.3.2 Add friendly local-dev and CLI UX shortcuts
+
+Manual testing showed that the current development path still makes testers compose long shell commands, export `PATH` by hand, and call sidecar-oriented commands for common user workflows.
+
+Add a small user-facing UX layer before more release polish:
+
+- add an `xtask` command such as `xtask zed-dev` or `xtask manual-zed` that:
+  - builds `local-history-cli`, `local-history-sidecar`, and `local-history-mcp`;
+  - prepares or reuses a test project path;
+  - launches Zed with `RUSTUP_TOOLCHAIN=stable`, cargo in `PATH`, and local debug binaries in `PATH`;
+  - prints the exact project root, binary paths, and first Agent prompt to try.
+- add CLI shortcuts for common workflows so normal users do not need sidecar commands:
+  - `local-history start <project-root>` for `local-history-sidecar ensure-daemon`;
+  - `local-history status <project-root>` with watcher state included;
+  - `local-history render-markdown current-hour <project-root>`;
+  - `local-history render-markdown current-segment <project-root>`;
+  - `local-history render-markdown previous-hour <project-root>`.
+- keep `local-history-sidecar` documented as an internal/editor boundary, not the main human entry point.
+- update README and manual testing docs to prefer the friendly commands once implemented.
+
+Acceptance:
+
+- a contributor can launch the dev Zed scenario with one documented command;
+- a user can start watching, check status, list snapshots, render current history, restore, and undo through `local-history` without directly calling `local-history-sidecar`;
+- existing sidecar commands remain available for extension integration and debugging.
 
 ### 11.4 Define update behavior
 

@@ -8,6 +8,7 @@ It keeps the project's agent-facing and implementation-guiding documentation in 
 - `GOALS.md` captures product direction and architectural constraints.
 - `DEVELOPMENT_PLAN.md` turns those goals into staged implementation work.
 - `FINALIZE.md` is the post-change checklist before considering a change set done.
+- `ZED_MANUAL_TESTING.md` contains the live Zed/manual acceptance flow and local dev setup.
 
 ## Why this exists
 
@@ -19,3 +20,4 @@ It keeps the project's agent-facing and implementation-guiding documentation in 
 - Read `DEVELOPMENT_PLAN.md` when planning implementation work or scoping milestones.
 - Read `AGENTS.md` before making repository-wide changes.
 - Read `FINALIZE.md` before closing out a change set or preparing it for commit.
+- Read `ZED_MANUAL_TESTING.md` when validating the Zed extension, MCP, or release bootstrap manually.

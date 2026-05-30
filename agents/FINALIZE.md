@@ -1,12 +1,6 @@
-# FINALIZE.md
+# Finalization Checklist
 
-> **Post-change checklist for `zed-local-history`**
->
-> Run through this after feature or refactor work to keep the native workspace, Zed extension, and project docs aligned.
->
-> Last Updated: 2026-05-02
-
----
+Run through this after feature or refactor work to keep the native workspace, Zed extension, and project docs aligned.
 
 ## 1. Tests for new functionality
 
@@ -111,6 +105,6 @@ cargo run -p xtask -- full-ci
 
 ## 10. Commit preparation (do not commit)
 
-- [ ] Review the final diff for scaffolding drift, placeholder text, and stale bootstrap comments
+- [ ] Review the final diff for scaffolding drift, temporary text, and stale bootstrap comments
 - [ ] Draft a concise commit message that matches the actual scope of the change set
 - [ ] Present the proposed commit summary to the user; do not run `git commit` automatically

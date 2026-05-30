@@ -1,8 +1,4 @@
-# GOALS.md
-
 # Local History for Zed
-
-_Last updated: 2026-05-02_
 
 ## 1. Project Vision
 
