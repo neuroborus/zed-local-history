@@ -249,7 +249,7 @@ Initial implemented tool surface:
 - `local_history_restore_snapshot`
 - `local_history_prune`
 
-If this crate is added, it must not become a second home for storage or restore business logic. It is an adapter layer.
+MCP remains an adapter layer over `local-history-core`; it must not become a second home for storage or restore business logic.
 
 ### 5.5 `editors/zed`
 

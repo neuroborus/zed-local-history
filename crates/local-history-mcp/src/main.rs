@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use local_history_core::{
-    default_data_dir, normalize_project_root, snapshot_to_current_unified_diff, LocalHistoryStore,
-    RestoreOutcome, RetentionPolicy, SnapshotId, SnapshotKind, SnapshotPage, SnapshotQuery,
-    SnapshotRecord, SnapshotWriteRequest, StorageLayout,
+    default_data_dir, format_timestamp_local, init_local_offset_detection, normalize_project_root,
+    snapshot_to_current_unified_diff, LocalHistoryStore, RestoreOutcome, RetentionPolicy,
+    SnapshotId, SnapshotKind, SnapshotPage, SnapshotQuery, SnapshotRecord, SnapshotWriteRequest,
+    StorageLayout,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -52,6 +53,8 @@ fn main() {
         }
         None => {}
     }
+
+    init_local_offset_detection();
 
     if let Err(error) = run_stdio_server() {
         eprintln!("{error}");
@@ -651,7 +654,7 @@ fn recent_summary(snapshots: &[SnapshotRecord], include_safety: bool) -> String 
         lines.push(format!(
             "{}. {} — {} — {}{}{}",
             index + 1,
-            human_timestamp(&snapshot.timestamp),
+            format_timestamp_local(&snapshot.timestamp),
             snapshot.relative_path.display(),
             short_id(snapshot.id.as_str()),
             kind_suffix,
@@ -898,19 +901,6 @@ fn current_timestamp() -> Result<String, String> {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|error| format!("failed to format timestamp: {error}"))
-}
-
-fn human_timestamp(raw: &str) -> String {
-    OffsetDateTime::parse(raw, &Rfc3339)
-        .ok()
-        .and_then(|timestamp| {
-            timestamp
-                .format(&time::macros::format_description!(
-                    "[year]-[month]-[day] [hour]:[minute]:[second]"
-                ))
-                .ok()
-        })
-        .unwrap_or_else(|| raw.to_string())
 }
 
 fn short_id(value: &str) -> &str {

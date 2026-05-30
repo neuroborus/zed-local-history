@@ -13,7 +13,8 @@ Core domain and storage layer for `zed-local-history`.
 - raw, safety, hour, and segment history queries;
 - Markdown view generation and rebuild;
 - retention and prune behavior;
-- unified text diff from snapshot content to the current live file.
+- unified text diff from snapshot content to the current live file;
+- local timezone formatting for human-facing timestamp display.
 
 ## Owns
 
@@ -21,6 +22,7 @@ Core domain and storage layer for `zed-local-history`.
 - Snapshot ID, project ID, content hash, and restore domain types.
 - Filesystem-browsable Markdown rendering from stored snapshots.
 - Safety-first restore behavior.
+- Shared human timestamp formatting (`format_timestamp_local`) for CLI and MCP display boundaries.
 
 ## Does Not Own
 
@@ -38,4 +40,4 @@ Core domain and storage layer for `zed-local-history`.
 
 ## Validation
 
-Core tests should cover storage, restore safety, prune behavior, ignore rules, history grouping, Markdown rendering, and snapshot-to-live unified diff behavior without depending on editor or process behavior.
+Core tests should cover storage, restore safety, prune behavior, ignore rules, history grouping, Markdown rendering, snapshot-to-live unified diff behavior, and timestamp display formatting without depending on editor or process behavior.

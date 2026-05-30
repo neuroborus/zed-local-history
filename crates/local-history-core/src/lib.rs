@@ -6,6 +6,7 @@ mod ignore;
 mod layout;
 mod model;
 mod storage;
+mod time_format;
 
 pub use diff::{snapshot_to_current_unified_diff, SnapshotDiffError};
 pub use error::StorageError;
@@ -23,3 +24,6 @@ pub use model::{
     TimeSegment, TrackedFileRecord, WindowedFileHistory,
 };
 pub use storage::{LocalHistoryStore, SnapshotPage, SnapshotQuery, SnapshotWriteRequest};
+pub use time_format::{
+    format_timestamp_local, format_timestamp_with_offset, init_local_offset_detection,
+};

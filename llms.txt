@@ -53,6 +53,8 @@ The durable source of truth is SQLite metadata plus compressed content-addressed
 
 Project IDs are stable but privacy-aware: they are derived from the canonical project root plus a machine-specific salt. Do not rely on project names being visible in IDs.
 
+Snapshot timestamps are stored as RFC3339 UTC. Human-readable CLI and MCP output convert them to the local system timezone. `--json` output and MCP structured snapshot fields keep canonical UTC timestamps.
+
 ## Snapshot Semantics
 
 The watcher stores the previous known file state when a file changes.

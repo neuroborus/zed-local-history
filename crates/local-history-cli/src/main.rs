@@ -5,10 +5,10 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use local_history_core::{
-    default_data_dir, project_id_for_root, snapshot_to_current_unified_diff, HourHistory,
-    LocalHistoryStore, PruneReport, RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId,
-    SnapshotKind, SnapshotPage, SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout,
-    WindowedFileHistory,
+    default_data_dir, format_timestamp_local, init_local_offset_detection, project_id_for_root,
+    snapshot_to_current_unified_diff, HourHistory, LocalHistoryStore, PruneReport, RestoreOutcome,
+    RetentionPolicy, SegmentHistory, SnapshotId, SnapshotKind, SnapshotPage, SnapshotQuery,
+    SnapshotRecord, SnapshotWriteRequest, StorageLayout, WindowedFileHistory,
 };
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
@@ -166,6 +166,7 @@ enum Commands {
 }
 
 fn main() -> ExitCode {
+    init_local_offset_detection();
     let cli = Cli::parse();
 
     match run(cli) {
@@ -247,7 +248,7 @@ fn snapshot_file(project_root: &Path, relative_path: &Path) -> Result<(), String
     println!("id={}", snapshot.id);
     println!("path={}", snapshot.relative_path.display());
     println!("kind={}", snapshot.kind.as_str());
-    println!("timestamp={}", human_timestamp(&snapshot.timestamp));
+    println!("timestamp={}", format_timestamp_local(&snapshot.timestamp));
     println!("blob_hash={}", snapshot.blob_hash);
     println!("size_bytes={}", snapshot.size_bytes);
 
@@ -342,7 +343,7 @@ fn prune_history(project_root: &Path, json_output: bool) -> Result<(), String> {
     println!("prune complete");
     println!("project_root={}", store.project().root.display());
     println!("project_id={}", store.project().id.as_str());
-    println!("pruned_at={}", human_timestamp(&report.pruned_at));
+    println!("pruned_at={}", format_timestamp_local(&report.pruned_at));
     println!(
         "deleted_restore_operations={} deleted_snapshots={} deleted_blobs={} deleted_blob_bytes={}",
         report.deleted_restore_operation_count,
@@ -400,7 +401,7 @@ fn show_snapshot(snapshot_id_input: &str, json_output: bool) -> Result<(), Strin
     println!("relative_path={}", snapshot.relative_path.display());
     println!("kind={}", snapshot.kind.as_str());
     println!("captures_missing_file={}", snapshot.captures_missing_file);
-    println!("timestamp={}", human_timestamp(&snapshot.timestamp));
+    println!("timestamp={}", format_timestamp_local(&snapshot.timestamp));
     println!("size_bytes={}", snapshot.size_bytes);
     println!("blob_hash={}", snapshot.blob_hash);
     println!("content_preview:");
@@ -443,8 +444,8 @@ fn print_hour_history(project_root: &Path, hour: &str, json_output: bool) -> Res
 
     println!(
         "Hour history {} -> {}",
-        human_timestamp(&history.hour.from),
-        human_timestamp(&history.hour.to)
+        format_timestamp_local(&history.hour.from),
+        format_timestamp_local(&history.hour.to)
     );
     println!();
 
@@ -478,8 +479,8 @@ fn print_segment_history_text(history: &SegmentHistory) {
     println!(
         "[{}] {} -> {}",
         history.segment.label,
-        human_timestamp(&history.segment.from),
-        human_timestamp(&history.segment.to)
+        format_timestamp_local(&history.segment.from),
+        format_timestamp_local(&history.segment.to)
     );
 
     if history.affected_files.is_empty() {
@@ -503,7 +504,7 @@ fn print_segment_history_text(history: &SegmentHistory) {
         for snapshot in &file_history.snapshots {
             println!(
                 "  {}  {}",
-                human_timestamp(&snapshot.timestamp),
+                format_timestamp_local(&snapshot.timestamp),
                 short_id(snapshot.id.as_str())
             );
         }
@@ -671,7 +672,7 @@ fn preview_and_maybe_restore(
     println!("selected snapshot");
     println!("id={}", snapshot.id);
     println!("path={}", snapshot.relative_path.display());
-    println!("timestamp={}", human_timestamp(&snapshot.timestamp));
+    println!("timestamp={}", format_timestamp_local(&snapshot.timestamp));
     println!("size_bytes={}", snapshot.size_bytes);
     println!("content_preview:");
     println!("{}", render_snapshot_preview(snapshot, &contents));
@@ -760,12 +761,12 @@ fn print_restore_outcome(label: &str, outcome: &RestoreOutcome) {
     println!("path={}", outcome.restored_path.display());
     println!(
         "restored_snapshot_timestamp={}",
-        human_timestamp(&outcome.restored_snapshot.timestamp)
+        format_timestamp_local(&outcome.restored_snapshot.timestamp)
     );
     println!("safety_snapshot_id={}", outcome.safety_snapshot.id);
     println!(
         "safety_snapshot_timestamp={}",
-        human_timestamp(&outcome.safety_snapshot.timestamp)
+        format_timestamp_local(&outcome.safety_snapshot.timestamp)
     );
     println!(
         "previous_file_existed={}",
@@ -926,19 +927,6 @@ fn ambiguous_snapshot_prefix_error(prefix: &str, matches: &[SnapshotId]) -> Stri
     message
 }
 
-fn human_timestamp(raw: &str) -> String {
-    OffsetDateTime::parse(raw, &Rfc3339)
-        .ok()
-        .and_then(|timestamp| {
-            timestamp
-                .format(&time::macros::format_description!(
-                    "[year]-[month]-[day] [hour]:[minute]:[second]"
-                ))
-                .ok()
-        })
-        .unwrap_or_else(|| raw.to_string())
-}
-
 fn format_recent_line(index: usize, snapshot: &SnapshotRecord) -> String {
     let kind_suffix = match snapshot.kind {
         SnapshotKind::Raw => "",
@@ -952,7 +940,7 @@ fn format_recent_line(index: usize, snapshot: &SnapshotRecord) -> String {
 
     format!(
         "[{index}] {}  {:<40}  {}{}{}",
-        human_timestamp(&snapshot.timestamp),
+        format_timestamp_local(&snapshot.timestamp),
         snapshot.relative_path.display(),
         short_id(snapshot.id.as_str()),
         kind_suffix,
@@ -1150,7 +1138,7 @@ fn confirm(label: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ambiguous_snapshot_prefix_error, format_recent_line, human_timestamp, render_preview,
+        ambiguous_snapshot_prefix_error, format_recent_line, render_preview,
         render_snapshot_preview, resolve_time_filters, short_id, Cli, Commands, HistoryCommands,
         RenderMarkdownCommands, SnapshotFilterArgs,
     };
@@ -1458,13 +1446,5 @@ mod tests {
 
         assert_eq!(from.as_deref(), Some("2026-05-02T14:00:00Z"));
         assert_eq!(to.as_deref(), Some("2026-05-02T15:00:00Z"));
-    }
-
-    #[test]
-    fn renders_human_timestamp_when_input_is_rfc3339() {
-        assert_eq!(
-            human_timestamp("2026-05-02T14:18:51Z"),
-            "2026-05-02 14:18:51"
-        );
     }
 }
