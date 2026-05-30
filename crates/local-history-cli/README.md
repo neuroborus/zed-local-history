@@ -7,7 +7,7 @@ User-facing terminal interface for `zed-local-history`.
 `local-history-cli` owns human and JSON command-line workflows:
 
 - manual snapshot creation;
-- recent, list, show, and browse commands;
+- recent, list, show, diff, and browse commands;
 - restore by full snapshot ID, unique prefix, or recent-list number;
 - safety-list, undo-restore, and restore-last-safety commands;
 - hour and segment history queries;
@@ -20,6 +20,7 @@ User-facing terminal interface for `zed-local-history`.
 - Human-readable output.
 - JSON output at the command boundary.
 - Interactive browse behavior.
+- Unified text diff output from snapshot to current live file.
 - Snapshot ID prefix resolution for CLI input.
 
 ## Does Not Own
@@ -38,4 +39,4 @@ User-facing terminal interface for `zed-local-history`.
 
 ## Validation
 
-CLI tests should focus on command parsing, output contracts, snapshot ID prefix behavior, and user-facing restore flows. Storage invariants belong in `local-history-core`.
+CLI tests should focus on command parsing, output contracts, snapshot ID prefix behavior, diff output against live files, and user-facing restore flows. Storage invariants belong in `local-history-core`.

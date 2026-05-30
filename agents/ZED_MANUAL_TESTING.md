@@ -411,6 +411,18 @@ Or a full snapshot ID from:
 local-history recent "$TEST_PROJECT" --json
 ```
 
+Before restoring, inspect the code-level change against the current live file:
+
+```bash
+local-history diff <snapshot-id-or-unique-prefix>
+```
+
+Expected:
+
+- output is a unified text diff;
+- `--- snapshot:<id>:note.txt` represents the stored previous state;
+- `+++ current:<path>` represents the current live file.
+
 ### Option A — CLI (recommended on Zed 1.4.4)
 
 ```bash

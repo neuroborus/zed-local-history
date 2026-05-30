@@ -13,6 +13,8 @@ MCP stdio adapter for agent-facing local-history tools.
 - structured tool output for status, snapshot creation, recent snapshots, snapshot view, restore, and prune;
 - safety-first restore access through MCP.
 
+`local-history-mcp` does not expose a diff tool yet. Use CLI `local-history diff <snapshot-id-or-unique-prefix>` for unified text diff against the current live file.
+
 ## Owns
 
 - MCP protocol boundary.

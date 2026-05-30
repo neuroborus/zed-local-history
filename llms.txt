@@ -128,6 +128,7 @@ Common terminal workflow:
 local-history status /path/to/project
 local-history recent /path/to/project
 local-history show <snapshot-id-or-unique-prefix>
+local-history diff <snapshot-id-or-unique-prefix>
 local-history restore --project-root /path/to/project --recent 1
 local-history restore <snapshot-id-or-unique-prefix>
 local-history undo-restore /path/to/project
@@ -148,6 +149,8 @@ local-history-sidecar render-markdown previous-hour /path/to/project
 ```
 
 `local-history-sidecar` is primarily an internal/editor boundary. Prefer `local-history` for normal user-facing CLI workflows when an equivalent command exists.
+
+`local-history diff <snapshot-id-or-prefix>` compares the snapshot to the current live file and prints a unified text diff. The direction is snapshot to current file.
 
 ## MCP Agent Use
 
@@ -184,11 +187,12 @@ Recommended agent sequence:
 2. Call `local_history_status` for the project root.
 3. Call `local_history_recent_snapshots` with a small limit and filters when helpful.
 4. Call `local_history_view_snapshot` before restore unless the user already selected an exact snapshot.
-5. Call `local_history_restore_snapshot` only after the target is clear.
-6. Tell the user the `safety_snapshot_id` from restore output.
-7. If the restore was wrong, use the CLI `local-history undo-restore <project-root>` because MCP does not expose undo yet.
+5. For code-level inspection before restore, use CLI `local-history diff <snapshot-id-or-prefix>` because MCP does not expose diff yet.
+6. Call `local_history_restore_snapshot` only after the target is clear.
+7. Tell the user the `safety_snapshot_id` from restore output.
+8. If the restore was wrong, use the CLI `local-history undo-restore <project-root>` because MCP does not expose undo yet.
 
-MCP does not currently expose diff, undo, prompts, or watcher start tools. The guide is available through `local_history_guide` and `local-history://guide`.
+MCP does not currently expose diff, undo, prompts, or watcher start tools. Use CLI `local-history diff` for unified text diff against the current live file. The guide is available through `local_history_guide` and `local-history://guide`.
 
 ## Zed Extension Notes
 

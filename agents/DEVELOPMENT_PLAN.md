@@ -451,7 +451,15 @@ local-history show <snapshot-id>
 
 It should print metadata and optionally content preview.
 
-### 4.3 Add recent snapshots command
+### 4.3 Add diff command
+
+```text
+local-history diff <snapshot-id>
+```
+
+It should print a unified text diff from the snapshot to the current live file. Binary diffs can report a clear unsupported textual diff error.
+
+### 4.4 Add recent snapshots command
 
 ```text
 local-history recent <project-root> --limit 10
@@ -467,7 +475,7 @@ Latest snapshots
 [3] 2026-05-02 14:11:03  src/orders/order.service.ts        ghi789
 ```
 
-### 4.4 Add basic restore by snapshot ID
+### 4.5 Add basic restore by snapshot ID
 
 ```text
 local-history restore <snapshot-id>
@@ -484,6 +492,7 @@ A developer can manually create snapshots, list them, inspect them, and perform 
 - Manual snapshot command works.
 - `recent --limit 10` shows numbered snapshots.
 - `show <snapshot-id>` displays useful metadata.
+- `diff <snapshot-id>` displays a unified text diff against the current live file.
 - Basic restore by snapshot ID works.
 - Commands return clear errors for missing files or missing snapshots.
 
@@ -1216,6 +1225,7 @@ The MVP is usable, documented, safe, and test-covered.
 - User can save a file and see a snapshot.
 - User can list latest 10 snapshots.
 - User can paginate snapshots.
+- User can view a unified diff from a snapshot to the current live file.
 - User can restore by ID.
 - User can restore by recent-list number.
 - Restore always creates a safety snapshot.
@@ -1252,10 +1262,16 @@ Add optional grouping by:
 
 Add:
 
-- unified diff in CLI;
 - generated diff Markdown;
 - temporary files for manual comparison;
+- MCP `local_history_diff_snapshot` tool;
 - native side-by-side diff if Zed exposes a suitable API.
+
+Local implementation status:
+
+- CLI `local-history diff <snapshot-id-or-unique-prefix>` is implemented for text snapshots against the current live file;
+- binary diffs are intentionally reported as unsupported textual diffs;
+- Markdown, MCP, and native Zed diff surfaces remain post-MVP improvements.
 
 ### 13.3 Native Zed UI if supported
 
@@ -1312,6 +1328,7 @@ Because the sidecar is editor-independent, support can be added for:
 - [x] Recent list is numbered.
 - [x] Restore by snapshot ID works.
 - [x] Restore/show by unique snapshot ID prefix works.
+- [x] Unified text diff by unique snapshot ID prefix works.
 - [x] Restore by recent-list number works.
 - [x] Pagination works.
 - [x] Filters by file/time work.

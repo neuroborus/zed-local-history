@@ -22,6 +22,9 @@ local-history recent /path/to/project --json
 # Preview one snapshot before restoring.
 local-history show <snapshot-id-or-unique-prefix>
 
+# Show code changes between one snapshot and the current live file.
+local-history diff <snapshot-id-or-unique-prefix>
+
 # Browse snapshots interactively in the terminal.
 local-history browse /path/to/project
 
@@ -52,8 +55,9 @@ Typical loop:
 1. Start the watcher once with `local-history-sidecar ensure-daemon`.
 2. Edit and save files normally.
 3. Use `local-history recent` to find a recovery point.
-4. Prefer `local-history restore --project-root <project> --recent <n>` for quick restores from the current list.
-5. Use `undo-restore` immediately if the restore was not the one you wanted.
+4. Use `local-history diff <snapshot-id-or-prefix>` to inspect code changes before restoring.
+5. Prefer `local-history restore --project-root <project> --recent <n>` for quick restores from the current list.
+6. Use `undo-restore` immediately if the restore was not the one you wanted.
 
 For contributor setup and manual Zed validation, use [agents/ZED_MANUAL_TESTING.md](agents/ZED_MANUAL_TESTING.md).
 
@@ -152,6 +156,12 @@ Restore the newest raw snapshot from the recent list:
 
 ```bash
 local-history restore --project-root . --recent 1
+```
+
+Inspect code changes before restoring:
+
+```bash
+local-history diff <snapshot-id-or-unique-prefix>
 ```
 
 Undo that restore:
@@ -285,6 +295,14 @@ Explicitly restore the newest safety snapshot:
 local-history restore-last-safety .
 ```
 
+Inspect code changes between a snapshot and the current live file:
+
+```bash
+local-history diff <snapshot-id-or-unique-prefix>
+```
+
+The diff direction is snapshot to current file. For a raw snapshot captured before a bad save, removed lines show what the snapshot had and added lines show what the live file has now.
+
 ### 6. Use interactive browse mode
 
 ```bash
@@ -391,7 +409,8 @@ local-history safety-list <project-root>
 ```bash
 local-history recent <project-root> [--json]
 local-history list <project-root> --page <n> --page-size <n> [--file <relative-path>] [--from <rfc3339>] [--to <rfc3339>] [--hour <YYYY-MM-DDTHH>] [--json]
-local-history show <snapshot-id>
+local-history show <snapshot-id-or-unique-prefix>
+local-history diff <snapshot-id-or-unique-prefix>
 local-history browse <project-root>
 ```
 
@@ -468,7 +487,7 @@ Current tool contract:
 - snapshot view and restore work by full `snapshot_id` or any unique snapshot ID prefix;
 - all tools accept optional `data_dir` when you want to use a non-default local-history storage base directory;
 - `local_history_restore_snapshot` remains safety-first and creates a safety snapshot before writing the live file;
-- `local_history_diff_snapshot` does not exist yet because the project still has no dedicated diff surface.
+- `local_history_diff_snapshot` does not exist yet; use CLI `local-history diff <snapshot-id-or-unique-prefix>` for textual diff against the current live file.
 
 ### Zed Agent Panel usage
 
@@ -511,10 +530,16 @@ Examples of requests that map well to the current tool surface:
 - "Restore snapshot `<snapshot-id>`."
 - "Prune local history for `/absolute/path/to/project`."
 
+For code-level diffs, use the CLI:
+
+```bash
+local-history diff <snapshot-id-or-unique-prefix>
+```
+
 ### Current MCP limitations
 
 - no prompts surface is exposed yet;
-- no diff tool exists yet;
+- no MCP diff tool exists yet;
 - extension-managed MCP release bootstrap still needs live validation against a real tagged GitHub Release.
 
 ## Zed usage
@@ -647,7 +672,8 @@ Delete all history by removing the whole base `local-history` directory.
 
 ### Restore failure
 
-- confirm the snapshot still exists with `show <snapshot-id>` or `recent <project-root>`;
+- confirm the snapshot still exists with `local-history show <snapshot-id-or-unique-prefix>` or `local-history recent <project-root>`;
+- inspect the live-file difference with `local-history diff <snapshot-id-or-unique-prefix>`;
 - note that a previously generated Markdown link can outlive the snapshot it references after pruning.
 
 ### Unsupported platform in Zed bootstrap

@@ -4,6 +4,7 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-30
 
+- Added CLI unified diff in the first post-MVP diff slice. `local-history diff <snapshot-id-or-unique-prefix>` compares a text snapshot to the current live file, reports binary and missing-file states clearly, and keeps MCP diff deferred to a later tool surface.
 - Added MCP agent operating context in Stage 11.3.3. Root `llms.txt` is now the maintained agent guide, packaged into `local-history-mcp` as `local-history://guide`, exposed through the read-only `local_history_guide` tool, and summarized in expanded MCP initialize instructions.
 - Fixed Markdown view navigation for real editor workflows. Generated view links now use absolute local paths under external storage, restore examples use installed `local-history` commands instead of `cargo run`, crate READMEs document crate boundaries, and manual testing now covers Markdown navigation and restore-from-page flows.
 - Cleaned up the documentation split after manual testing. The root README now keeps user-facing CLI and product docs only, while local Zed dev setup, `target/debug`, `PATH`, and manual acceptance steps live under `agents/ZED_MANUAL_TESTING.md`.

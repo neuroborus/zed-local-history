@@ -827,7 +827,7 @@ The CLI should support:
 
 ```text
 local-history show <snapshot-id>
-local-history diff <snapshot-id> --with-current
+local-history diff <snapshot-id>
 local-history open <snapshot-id>
 ```
 
@@ -948,7 +948,7 @@ local-history files <project-root> --from <ISO-datetime> --to <ISO-datetime>
 local-history snapshots <project-root> --file <relative-path> --from <ISO-datetime> --to <ISO-datetime>
 
 local-history show <snapshot-id>
-local-history diff <snapshot-id> --with-current
+local-history diff <snapshot-id>
 local-history open <snapshot-id>
 
 local-history restore <snapshot-id>
@@ -1116,7 +1116,7 @@ MVP diff strategy should be simple:
 Commands:
 
 ```text
-local-history diff <snapshot-id> --with-current
+local-history diff <snapshot-id>
 local-history diff <snapshot-id> --with <other-snapshot-id>
 ```
 
