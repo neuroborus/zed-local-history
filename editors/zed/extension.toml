@@ -6,6 +6,8 @@ authors = ["neuroborus"]
 repository = "https://github.com/neuroborus/zed-local-history"
 schema_version = 1
 
+[context_servers.local-history]
+
 [slash_commands.local-history-status]
 description = "Show local-history watcher and storage status"
 requires_argument = false

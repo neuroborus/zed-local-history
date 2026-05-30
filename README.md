@@ -4,6 +4,108 @@ Filesystem-first local history for Zed.
 
 This project stores previous saved states of files outside the user repository, exposes them through a native CLI, a native sidecar watcher, generated Markdown history views, a thin Zed extension, and an additive MCP stdio server. The recovery path does not depend on Git, stash, or a custom editor UI.
 
+## Quickstart: local Zed dev run
+
+Use this path when testing the extension from this repository.
+
+1. Use a current Zed build.
+
+   Zed Stable 1.4.4 or newer is the current acceptance baseline. Check:
+
+   ```bash
+   zed --version
+   ```
+
+2. Prepare Rust for the Zed extension.
+
+   The native workspace uses Rust 1.75.0, but the Zed extension builds with stable Rust and `wasm32-wasip2`.
+
+   ```bash
+   rustup +stable target add wasm32-wasip2
+   cargo run -p xtask -- full-ci
+   ```
+
+3. Build the local binaries used during dev testing.
+
+   ```bash
+   cargo build -p local-history-sidecar -p local-history-cli -p local-history-mcp
+   ```
+
+4. Create a clean test project and launch Zed from the same shell.
+
+   ```bash
+   mkdir -p /tmp/lh-zed-manual
+   printf 'v1\n' > /tmp/lh-zed-manual/note.txt
+
+   RUSTUP_TOOLCHAIN=stable \
+   PATH="$HOME/.cargo/bin:$PWD/target/debug:$PATH" \
+   zed --foreground /tmp/lh-zed-manual
+   ```
+
+   Launching from the shell matters: Zed must see `rustup`, the stable extension toolchain, and `target/debug/local-history-sidecar` / `target/debug/local-history-mcp` in `PATH`.
+
+5. Install the extension in Zed.
+
+   Open Extensions, choose `Install Dev Extension`, and select:
+
+   ```text
+   editors/zed
+   ```
+
+6. Start the watcher.
+
+   From a terminal:
+
+   ```bash
+   local-history-sidecar ensure-daemon /tmp/lh-zed-manual
+   local-history-sidecar status /tmp/lh-zed-manual
+   ```
+
+   If you are using a Zed surface that supports extension slash commands, `/local-history-start-watcher` and `/local-history-status` call the same sidecar paths.
+
+7. Use the Zed Agent Panel through MCP, not slash commands.
+
+   The new Agent Panel treats text starting with `/` as Agent commands. Extension slash commands such as `/local-history-status` are not Agent commands, so the Agent may report that they are unrecognized.
+
+   This extension registers the `local-history` MCP context server for Agent use. Ask in natural language, for example:
+
+   ```text
+   Use local-history to show status for /tmp/lh-zed-manual.
+   ```
+
+   If Zed does not start the extension-managed context server, add the MCP server manually in Zed settings:
+
+   ```json
+   {
+     "context_servers": {
+       "local-history": {
+         "command": "local-history-mcp",
+         "args": []
+       }
+     }
+   }
+   ```
+
+8. Capture and restore.
+
+   Edit and save `/tmp/lh-zed-manual/note.txt`, then inspect snapshots:
+
+   ```bash
+   local-history recent /tmp/lh-zed-manual
+   ```
+
+   Restore by exact snapshot ID:
+
+   ```bash
+   local-history restore <snapshot-id>
+   ```
+
+   Undo the latest restore:
+
+   ```bash
+   local-history undo-restore /tmp/lh-zed-manual
+   ```
+
 ## What it does
 
 - watches a project and stores the previous on-disk state of a file when that file changes or is deleted;
@@ -24,7 +126,7 @@ This project stores previous saved states of files outside the user repository, 
 - `local-history-sidecar`
   Native daemon/process boundary for watcher startup, watcher status, restore, and Markdown render commands used by Zed.
 - `editors/zed`
-  Thin Zed extension package that resolves or downloads the sidecar and exposes focused slash commands.
+  Thin Zed extension package that resolves or downloads the sidecar, exposes focused slash commands where Zed supports them, and registers the MCP context server for the Zed Agent Panel.
 - `local-history-mcp`
   MCP stdio server for agent-facing tool calls.
 
@@ -407,9 +509,19 @@ Current tool contract:
 - `local_history_restore_snapshot` remains safety-first and creates a safety snapshot before writing the live file;
 - `local_history_diff_snapshot` does not exist yet because the project still has no dedicated diff surface.
 
-### Zed `context_servers` example
+### Zed Agent Panel usage
 
-Build the MCP binary:
+The Zed Agent Panel uses MCP tools, not extension slash commands.
+
+When the dev extension is installed and `local-history-mcp` is available in `PATH`, the extension registers the `local-history` context server automatically.
+
+Ask the Agent in natural language:
+
+```text
+Use local-history to show status for /absolute/path/to/project.
+```
+
+If you want to configure the MCP server manually instead, build the MCP binary:
 
 ```bash
 cargo build -p local-history-mcp
@@ -451,7 +563,7 @@ Examples of requests that map well to the current tool surface:
 - no prompts surface is exposed yet;
 - no resources surface is exposed yet;
 - no diff tool exists yet;
-- the Zed extension does not auto-register the MCP server yet, so direct `context_servers` configuration is the current path.
+- extension-managed MCP registration currently expects `local-history-mcp` to be available in `PATH`; packaged release bootstrap for the MCP binary still needs live validation.
 
 ## Zed usage
 
@@ -474,9 +586,12 @@ cargo run -p xtask -- zed-ci
 - resolves `local-history-sidecar` from `PATH` for development workflows;
 - otherwise downloads and caches the matching GitHub release asset;
 - verifies sidecar version compatibility before use;
-- runs focused sidecar commands from slash handlers.
+- runs focused sidecar commands from slash handlers;
+- registers the `local-history` MCP context server for Agent Panel tool use when `local-history-mcp` is available in `PATH`.
 
 ### Current slash commands
+
+These are extension slash commands for Zed surfaces that support extension slash commands. They are not commands in the new Zed Agent Panel command menu.
 
 - `/local-history-status`
 - `/local-history-start-watcher`

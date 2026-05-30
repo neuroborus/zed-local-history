@@ -7,6 +7,8 @@ use zed_extension_api as zed;
 
 const RELEASE_REPOSITORY: &str = "neuroborus/zed-local-history";
 const SIDECAR_BINARY_STEM: &str = "local-history-sidecar";
+const MCP_BINARY_STEM: &str = "local-history-mcp";
+const MCP_CONTEXT_SERVER_ID: &str = "local-history";
 const MINIMUM_COMPATIBLE_SIDECAR_VERSION: &str = "0.1.0";
 
 struct LocalHistoryExtension;
@@ -132,6 +134,24 @@ impl zed::Extension for LocalHistoryExtension {
         Ok(zed::SlashCommandOutput {
             text,
             sections: Vec::new(),
+        })
+    }
+
+    fn context_server_command(
+        &mut self,
+        context_server_id: &zed::ContextServerId,
+        _project: &zed::Project,
+    ) -> Result<zed::Command, String> {
+        if context_server_id.as_ref() != MCP_CONTEXT_SERVER_ID {
+            return Err(format!(
+                "unknown local-history context server: {context_server_id}"
+            ));
+        }
+
+        Ok(zed::Command {
+            command: MCP_BINARY_STEM.to_string(),
+            args: Vec::new(),
+            env: Vec::new(),
         })
     }
 }

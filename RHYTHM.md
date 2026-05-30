@@ -2,6 +2,11 @@
 
 Chronological log of meaningful repo decisions. **Newest sections first:** add each new `## YYYY-MM-DD` block right below this paragraph, not at the end of the file.
 
+## 2026-05-30
+
+- Clarified the real Zed dev quickstart after live manual testing. The root README now starts with the current Zed/Rust setup path, the required `wasm32-wasip2` target, the shell launch form that exposes `rustup` and local debug binaries to Zed, and the Agent Panel nuance that `/local-history-*` extension slash commands are not Agent commands.
+- Wired the Zed extension's first MCP context server registration. `extension.toml` now declares `[context_servers.local-history]`, and the extension returns a `local-history-mcp` command for Agent Panel tool use when that binary is available in `PATH`. Packaged MCP bootstrap remains a release-validation item; the dev path now matches Zed's MCP extension model instead of requiring only manual `context_servers` settings.
+
 ## 2026-05-03
 
 - Closed the remaining non-manual MCP packaging gap. GitHub release bundles now stage and archive `local-history-mcp` alongside `local-history` and `local-history-sidecar`, so the README's packaged MCP binary path matches the actual release contract instead of only the development workspace layout.

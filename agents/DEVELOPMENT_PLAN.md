@@ -251,7 +251,8 @@ The MCP server is not a numbered stage, but when implemented it should follow th
    - `local_history_prune`
 4. Keep handlers thin by adapting to `local-history-core` or existing sidecar-facing behavior.
 5. Return both human-readable text content and stable structured JSON content in tool results.
-6. Keep extension-managed MCP registration optional; direct Zed `context_servers` setup is acceptable.
+6. Keep direct Zed `context_servers` setup as a supported fallback.
+7. When the Zed extension registers the MCP server automatically, treat any `PATH` lookup for `local-history-mcp` as a development-only shortcut. Production UX must resolve, download, cache, and launch the MCP binary through the same release-bootstrap model used for the sidecar.
 
 Acceptance for this additive slice:
 
@@ -643,6 +644,24 @@ Minimum behavior:
 
 This can be prompt-based. It does not need to be a full TUI for MVP.
 
+### 6.5 Make snapshot IDs ergonomic without weakening identity
+
+Keep stored snapshot identity opaque and stable:
+
+- internal snapshot IDs remain opaque hash-like identifiers;
+- do not make timestamp, path, or display formatting part of the storage identity contract;
+- keep timestamp and path as separate metadata fields in human, JSON, Markdown, and MCP output.
+
+Improve human recovery ergonomics:
+
+- show timestamp, path, list number, and a 12-character snapshot ID prefix in human tables;
+- keep full snapshot IDs available in `--json`, Markdown detail pages, logs, and MCP structured output;
+- let `restore` and `show` accept either a full snapshot ID or a unique snapshot ID prefix;
+- if a prefix is ambiguous, fail with a clear message and suggest longer matching prefixes;
+- keep `restore --project-root <path> --recent <index>` as the fastest fresh-list recovery path.
+
+The goal is the familiar Git/Docker-style workflow: short prefixes are convenient for humans, while full opaque IDs remain the durable machine contract.
+
 ## Expected Result
 
 A user can browse and recover snapshots without knowing exact snapshot IDs.
@@ -652,6 +671,8 @@ A user can browse and recover snapshots without knowing exact snapshot IDs.
 - Paginated listing works.
 - Filtering by file and time range works.
 - Query commands support `--json`.
+- Human tables use compact ID prefixes without making those prefixes dead-end values.
+- `show` and `restore` accept unique snapshot ID prefixes and report ambiguity clearly.
 - Interactive browse mode supports page navigation.
 - Interactive browse mode supports selecting a snapshot.
 - Interactive restore asks for confirmation.
@@ -939,6 +960,17 @@ If the project adds an MCP server, the extension may register it through `contex
 
 That route should remain additive. The MVP extension must not depend on MCP for basic recovery.
 
+If the extension registers MCP for Agent Panel use, the production path must not require users to put `local-history-mcp` in `PATH`. The extension should:
+
+- resolve a development `local-history-mcp` from `PATH` only for local/dev installs;
+- otherwise download the matching release asset;
+- cache it in an extension-managed location;
+- make it executable where needed;
+- verify version compatibility before launching;
+- produce clear errors when no supported MCP binary is available.
+
+This should mirror the sidecar bootstrap behavior closely enough that sidecar and MCP binary release contracts stay aligned.
+
 ## Expected Result
 
 A Zed user can install the extension, start watching, open history Markdown, and restore snapshots.
@@ -950,6 +982,7 @@ A Zed user can install the extension, start watching, open history Markdown, and
 - Extension can open snapshot view or generated report.
 - Extension can show status.
 - Extension can invoke restore by snapshot ID.
+- If Agent Panel MCP registration is enabled, the extension can start the MCP server without requiring manual `PATH` setup in production.
 - Errors are clear when required capabilities are unavailable.
 - User does not need to manually install Rust, Node.js, or system dependencies.
 
@@ -989,15 +1022,36 @@ Track:
 
 - extension version;
 - sidecar version;
+- MCP binary version;
 - minimum compatible sidecar version.
+- minimum compatible MCP binary version.
+
+### 11.3.1 Add MCP binary bootstrap parity
+
+The Zed extension's MCP registration must not depend on `local-history-mcp` being manually installed or present in `PATH` for normal users.
+
+Implement release bootstrap parity with the sidecar:
+
+- publish fixed-name MCP-only archives for every supported platform;
+- map Zed OS/architecture to the correct MCP archive;
+- download and cache the matching MCP binary in the extension work directory;
+- mark the binary executable on Unix platforms;
+- probe `local-history-mcp --version` or an equivalent machine-readable version command;
+- fall back from incompatible or missing `PATH` binaries to the cached/downloaded release binary;
+- report unsupported platforms and missing release assets clearly.
+
+Development installs may still prefer a `PATH` binary to support local iteration.
 
 ### 11.4 Define update behavior
 
 Decide whether the extension:
 
 - downloads sidecar once;
+- downloads MCP binary once;
 - updates sidecar automatically;
+- updates MCP binary automatically;
 - checks sidecar version on startup;
+- checks MCP binary version before Agent Panel launch;
 - supports user-provided binary path.
 
 ### 11.5 Prepare Zed extension submission
@@ -1013,8 +1067,10 @@ The project can publish installable artifacts for supported platforms.
 - Release workflow builds native binaries.
 - Artifacts include checksums.
 - Extension selects correct asset.
+- Extension selects correct MCP asset when Agent Panel MCP registration is enabled.
 - Unsupported platforms show clear error.
 - Sidecar compatibility is checked.
+- MCP binary compatibility is checked.
 - Zed extension is ready for submission.
 
 ---
@@ -1422,22 +1478,31 @@ Validate the additive MCP surface in a real agent client, not only through local
 
 ### Steps
 
-1. Register `local-history-mcp` in a real Zed `context_servers` config.
-2. Confirm MCP initialization succeeds and the server appears active.
-3. Verify `tools/list` exposes the expected local-history tools.
-4. Call:
+1. Validate the development path:
+   - install the Zed dev extension;
+   - put `target/debug/local-history-mcp` in `PATH`;
+   - confirm the extension-managed `local-history` context server starts.
+2. Validate the production path:
+   - remove local development binaries from `PATH`;
+   - install or run the extension against a tagged release;
+   - confirm the extension downloads/caches the matching `local-history-mcp` release asset.
+3. Validate the manual fallback path by registering `local-history-mcp` in a real Zed `context_servers` config with an explicit binary path.
+4. Confirm MCP initialization succeeds and the server appears active in each path.
+5. Verify `tools/list` exposes the expected local-history tools.
+6. Call:
    - `local_history_status`
    - `local_history_create_snapshot`
    - `local_history_recent_snapshots`
    - `local_history_view_snapshot`
    - `local_history_restore_snapshot`
    - `local_history_prune`
-5. Confirm restore still creates a safety snapshot before modifying the live file.
-6. Verify destructive-tool approval behavior in the real Agent Panel settings.
+7. Confirm restore still creates a safety snapshot before modifying the live file.
+8. Verify destructive-tool approval behavior in the real Agent Panel settings.
 
 ### Acceptance
 
 - Zed can start the MCP server successfully.
+- Production Agent Panel use does not require manual `PATH` setup for `local-history-mcp`.
 - The documented tools are available and callable.
 - Structured MCP output is usable by the agent.
 - Safety-first restore behavior is preserved through MCP.

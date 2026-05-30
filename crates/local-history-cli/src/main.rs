@@ -547,6 +547,12 @@ fn print_snapshot_query(
     for (index, snapshot) in page.items.iter().enumerate() {
         println!("{}", format_recent_line(index + 1, snapshot));
     }
+    println!();
+    println!(
+        "Use `local-history restore --project-root {} --recent <index>` to restore by list number.",
+        project_root.display()
+    );
+    println!("The table shows short snapshot ID prefixes; use `--json` for full snapshot IDs.");
 
     Ok(())
 }
