@@ -4,7 +4,7 @@ This document is the manual acceptance checklist for `zed-local-history` in a re
 
 Local dev details such as `cargo build`, `target/debug`, and shell `PATH` setup live here instead of the root README.
 
-Capability-based agent guidance lives in [llms.txt](../llms.txt): use MCP tools when the client exposes them; otherwise use the CLI mapping in that file.
+Capability-based agent guidance lives in [llms.txt](../llms.txt): use MCP tools when the client exposes them; otherwise use the CLI mapping in that file. The guide includes natural-language intent mapping — for example "what changed" or "summary of changes" should route to `recent` then `diff`/`show`, especially when Git is unavailable or the question is about saved file states.
 
 ## CLI-only Agent Testing
 
@@ -28,7 +28,19 @@ Ask the agent to recover history using **CLI commands only**, for example:
 Use local-history CLI commands to show status, list recent snapshots, show the latest snapshot for note.txt, diff it against the live file, and explain whether restore would be safe. Project root: /tmp/lh-agent-cli
 ```
 
-Expected:
+Or test **change-summary intent** without naming CLI subcommands:
+
+```text
+What changed in note.txt recently? There is no git history here. Project: /tmp/lh-agent-cli
+```
+
+Expected for change-summary intent:
+
+- the agent uses local-history (not only `git diff` or reading the live file);
+- the agent runs `recent` (or equivalent) and then `diff` or `show` on a relevant snapshot;
+- the answer summarizes snapshot-to-current differences in plain language.
+
+Expected for explicit recovery prompt:
 
 - the agent runs `local-history status`, `local-history recent`, `local-history show`, and `local-history diff` via shell;
 - the agent does not claim MCP tools ran if they are unavailable;
@@ -555,6 +567,18 @@ Expected:
 - structured output includes `diff` and `unchanged`;
 - the diff direction is snapshot → current live file;
 - restore is not performed during the diff call.
+
+Then verify **change-summary intent** through MCP without naming tool names:
+
+```text
+What changed in note.txt recently? Summarize the differences from local history, not git. Project: /tmp/lh-zed-manual
+```
+
+Expected:
+
+- the Agent uses `local_history_recent_snapshots` and then `local_history_diff_snapshot` or `local_history_view_snapshot`;
+- the answer summarizes snapshot-to-current differences;
+- the Agent does not answer from the live file alone when snapshots exist.
 
 ## Troubleshooting The 2026-05-30 First Manual Run
 

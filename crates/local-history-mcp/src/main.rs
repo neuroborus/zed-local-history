@@ -24,6 +24,14 @@ Use these tools for filesystem-first local history recovery when the client expo
 
 If the client does not expose local_history_* tools but can run shell commands, use the CLI equivalents documented in local_history_guide / local-history://guide instead of guessing behavior.
 
+Intent mapping (see the guide for the full table):
+- Questions like \"what changed\", \"summary of changes\", \"edit history\", or \"history of edits\" when Git is unavailable or the user means saved editor states: start with recent snapshots, then diff or view the relevant snapshot against the current live file.
+- \"Recover\", \"restore\", \"roll back\", or \"previous version\": recent -> view -> restore only after the target is clear.
+- \"Compare\", \"diff\", \"what is different now\": local_history_diff_snapshot or CLI diff.
+- \"Is history working\" / \"are snapshots saved\": local_history_status first.
+- \"Checkpoint now\" / \"snapshot before edit\": local_history_create_snapshot.
+- Prefer Git only when the user clearly wants commits, branches, or repository history.
+
 Core rules:
 - Most tools require an explicit absolute project_root.
 - Local history stores data outside the repository; generated Markdown is only a rebuildable browsing layer.
@@ -1304,7 +1312,8 @@ mod tests {
             .expect("resource text must be a string");
 
         assert!(text.contains("zed-local-history LLM Guide"));
-        assert!(text.contains("Restore is safety-first"));
+        assert!(text.contains("Natural language intent mapping"));
+        assert!(text.contains("safety snapshot"));
     }
 
     #[test]
@@ -1362,7 +1371,7 @@ mod tests {
         assert!(result["text"]
             .as_str()
             .expect("guide text must be a string")
-            .contains("Restore is safety-first"));
+            .contains("Natural language intent mapping"));
     }
 
     #[test]

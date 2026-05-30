@@ -1078,14 +1078,15 @@ Acceptance:
 
 ### 11.3.3 Add MCP agent operating context
 
-The Agent Panel can call tools, but tool names alone do not teach the model the product's recovery semantics. Provide a compact, maintained agent guide that explains storage, previous-state snapshots, restore safety, Markdown browsing, and MCP usage.
+The Agent Panel can call tools, but tool names alone do not teach the model the product's recovery semantics or how to interpret natural-language requests such as "what changed". Provide a compact, maintained agent guide that explains storage, previous-state snapshots, restore safety, Git vs local-history routing, natural-language intent mapping, and MCP or CLI usage.
 
 Implementation:
 
 - keep root `llms.txt` as the concise agent operating guide;
+- map common natural-language intents (change summary, recovery, diff, status) to MCP tools or CLI commands, including when Git is not the right tool;
 - expose the same guide through a read-only `local_history_guide` MCP tool;
 - expose the same guide through MCP as `local-history://guide`;
-- include safety-first restore and previous-state snapshot rules in MCP initialize instructions;
+- include safety-first restore, intent mapping summary, and previous-state snapshot rules in MCP initialize instructions;
 - document capability-based agent integration: MCP tools when exposed, CLI shell workflow when not;
 - document that Zed Agent Panel uses MCP tools, not extension slash commands, when MCP is available;
 - keep the guide aligned with README, crate READMEs, and manual testing docs.
@@ -1104,6 +1105,7 @@ Local implementation status:
 
 - implemented in `local-history-mcp`;
 - root `llms.txt` added and packaged into the MCP binary;
+- natural-language intent mapping lives in `llms.txt` and a condensed form in MCP `SERVER_INSTRUCTIONS`;
 - read-only `local_history_guide` tool added for clients that surface tools more reliably than resources;
 - README and agent docs reference the guide;
 - live Agent Panel validation remains tracked under the external validation plan.

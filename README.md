@@ -486,7 +486,7 @@ local-history-mcp --help
 ### Current MCP resources
 
 - `local-history://guide`
-  Complete agent operating guide, packaged from [llms.txt](llms.txt), covering storage, snapshot semantics, restore safety, Markdown browsing, CLI usage, MCP usage, and Zed integration boundaries.
+  Compact agent operating guide from [llms.txt](llms.txt): snapshot semantics, restore safety, natural-language intent mapping, MCP↔CLI workflow, and integration boundaries.
 
 Current tool contract:
 
@@ -499,7 +499,7 @@ Current tool contract:
 
 ### Agent usage
 
-Agents integrate through MCP tools when available, or through shell CLI commands when not. See [llms.txt](llms.txt) for the capability-based workflow and MCP-to-CLI mapping.
+Agents integrate through MCP tools when available, or through shell CLI commands when not. See [llms.txt](llms.txt) for the capability-based workflow, MCP-to-CLI mapping, and **natural-language intent mapping** (for example: "what changed" / "summary of changes" / "edit history" → recent snapshots, then diff or view — especially when Git is unavailable or the question is about saved file states, not commits).
 
 #### When MCP tools are available
 

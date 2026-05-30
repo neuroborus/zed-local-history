@@ -9,7 +9,7 @@ MCP stdio adapter for agent-facing local-history tools.
 - JSON-RPC stdio server lifecycle;
 - MCP initialize, ping, tools/list, tools/call, resources/list, and resources/read handling;
 - tool schemas and descriptions;
-- server instructions, the `local_history_guide` tool, and the packaged `local-history://guide` agent resource;
+- server instructions (including natural-language intent mapping for change-summary and recovery questions), the `local_history_guide` tool, and the packaged `local-history://guide` agent resource;
 - structured tool output for status, snapshot creation, recent snapshots, snapshot view, snapshot diff (including `unchanged`), restore, and prune;
 - human-readable summaries with local timezone timestamp display; structured snapshot timestamps remain canonical UTC.
 - safety-first restore access through MCP.

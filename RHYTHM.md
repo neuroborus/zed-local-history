@@ -5,6 +5,8 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 ## 2026-05-30
 
 - Human timestamp display in CLI and MCP now converts stored RFC3339 UTC values to the local system timezone. Storage, JSON output, and generated Markdown UTC labels stay unchanged; only human-readable tables and summaries use local time.
+- Trimmed `llms.txt` to ~115 lines: removed contributor architecture/docs-map duplication, merged MCP+CLI recommended sequences, compressed Markdown and sidecar notes into agent-ops essentials; kept intent mapping, safety semantics, and MCP↔CLI table.
+- Added natural-language intent mapping to `llms.txt` and MCP `SERVER_INSTRUCTIONS` (for example "what changed" / "edit history" → recent snapshots then diff or view when Git is unavailable or irrelevant).
 - Made agent guidance capability-based in `llms.txt`, MCP `SERVER_INSTRUCTIONS`, `README.md`, and `ZED_MANUAL_TESTING.md`. MCP tools are preferred when exposed; shell-only agents should use the documented CLI mapping instead of assuming `local_history_*` tools exist.
 - Added MCP unified diff in the Stage 13.2 diff slice. `local_history_diff_snapshot` reuses `local-history-core` diff logic, sits between view and restore in the MCP tool list, and returns the same unified text diff as CLI `local-history diff`.
 - Added CLI unified diff in the first post-MVP diff slice. `local-history diff <snapshot-id-or-unique-prefix>` compares a text snapshot to the current live file, reports binary and missing-file states clearly, and shares diff logic with MCP through `local-history-core`.
