@@ -4,6 +4,48 @@ Filesystem-first local history for Zed.
 
 This project stores previous saved states of files outside the user repository, exposes them through a native CLI, a native sidecar watcher, generated Markdown history views, a thin Zed extension, and an additive MCP stdio server. The recovery path does not depend on Git, stash, or a custom editor UI.
 
+## Examples
+
+Three ways to recover the same snapshots — pick the surface that fits the moment.
+
+### Agent — ask for a change summary
+
+Ask in natural language; the Zed Agent Panel uses MCP tools (`local_history_recent_snapshots`, `local_history_diff_snapshot`, …) to list recent saves, diff against the live file, and summarize what changed — without Git and without memorizing CLI subcommands.
+
+<p align="center">
+  <img src="docs/zed-lh-agent.gif" alt="Zed Agent Panel: natural-language question about edit history, MCP tools return a change summary" width="900">
+</p>
+
+See [Agent usage](#agent-usage) and [llms.txt](llms.txt) for intent mapping and MCP↔CLI equivalents.
+
+### CLI — recover from the terminal
+
+Use `local-history` for status, recent snapshots, show, diff, restore, and undo. Works in any shell-only agent host or when MCP tools are not exposed.
+
+<p align="center">
+  <img src="docs/zed-lh-cli.gif" alt="Terminal: local-history status, recent, diff, and restore workflow" width="900">
+</p>
+
+Command reference: [How To CLI](#how-to-cli) below.
+
+### Markdown preview — browse generated history
+
+History pages live under external storage (`view/`). Navigate day → hour → 10-minute segment → snapshot; each page shows metadata, a text preview, and restore commands. Safe to rebuild anytime.
+
+<p align="center">
+  <img src="docs/zed-lh-preview.gif" alt="Zed editor: browsing generated Markdown history views with snapshot previews" width="900">
+</p>
+
+Quick open from the project root:
+
+```bash
+zed "$(local-history view-root .)/README.md"
+```
+
+Details: [History Storage And Markdown View](#history-storage-and-markdown-view).
+
+---
+
 ## How To CLI
 
 Use `local-history` for normal terminal workflows. Use `local-history-sidecar` only for watcher startup/status and Zed-facing render helpers.
