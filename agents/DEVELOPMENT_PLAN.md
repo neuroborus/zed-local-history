@@ -1042,6 +1042,12 @@ Implement release bootstrap parity with the sidecar:
 
 Development installs may still prefer a `PATH` binary to support local iteration.
 
+Local implementation status:
+
+- implemented in the Zed extension through the same release-bootstrap model as the sidecar;
+- release workflow now emits fixed-name MCP-only archives for every supported platform;
+- live tagged-release validation is still tracked under the external validation plan.
+
 ### 11.4 Define update behavior
 
 Decide whether the extension:
@@ -1283,6 +1289,9 @@ Because the sidecar is editor-independent, support can be added for:
 - [x] Extension can show status.
 - [x] Extension can open or reveal generated Markdown in the currently supported API shape.
 - [x] Extension can request restore by snapshot ID.
+- [x] Extension can register the MCP context server for Agent Panel use.
+- [x] Extension can resolve/download the MCP binary without requiring manual `PATH` setup in production.
+- [x] MCP binary compatibility is checked before Agent Panel launch.
 - [x] Clear errors are shown when capabilities are missing.
 
 ## Release
@@ -1338,6 +1347,7 @@ Verify that the GitHub Release path works end-to-end, not just as static YAML.
 3. Verify that the GitHub Release contains:
    - user-facing platform bundles;
    - fixed-name sidecar bootstrap archives;
+   - fixed-name MCP bootstrap archives;
    - `SHA256SUMS.txt`.
 4. Download at least one archive and verify its checksum manually.
 5. Confirm archive contents match the documented contract.

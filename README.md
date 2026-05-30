@@ -42,7 +42,9 @@ Use this path when testing the extension from this repository.
    zed --foreground /tmp/lh-zed-manual
    ```
 
-   Launching from the shell matters: Zed must see `rustup`, the stable extension toolchain, and `target/debug/local-history-sidecar` / `target/debug/local-history-mcp` in `PATH`.
+   Launching from the shell matters for dev testing: Zed must see `rustup`, the stable extension toolchain, and the local `target/debug` binaries in `PATH`. Keep the `PATH=...` assignment on one shell line. If `command -v local-history-sidecar` or `command -v local-history-mcp` prints nothing in that shell, the path was not exported correctly.
+
+   Local binaries are a dev shortcut. In a packaged install, the extension resolves, downloads, and caches matching release binaries for both the sidecar and MCP server.
 
 5. Install the extension in Zed.
 
@@ -521,7 +523,7 @@ Current tool contract:
 
 The Zed Agent Panel uses MCP tools, not extension slash commands.
 
-When the dev extension is installed and `local-history-mcp` is available in `PATH`, the extension registers the `local-history` context server automatically.
+When the extension is installed, it registers the `local-history` context server automatically. For dev installs it prefers `local-history-mcp` from `PATH`; otherwise it downloads and caches the matching release MCP binary, the same way the sidecar bootstrap works.
 
 Ask the Agent in natural language:
 
@@ -553,7 +555,7 @@ If you prefer packaged binaries over development binaries, point `command` at th
 Current release contract:
 
 - platform bundles now include `local-history`, `local-history-sidecar`, `local-history-mcp`, `README.md`, and `LICENSE`;
-- fixed-name sidecar-only archives still exist separately for Zed extension bootstrap.
+- fixed-name sidecar-only and MCP-only archives exist separately for Zed extension bootstrap.
 
 ### Example MCP usage
 
@@ -571,7 +573,7 @@ Examples of requests that map well to the current tool surface:
 - no prompts surface is exposed yet;
 - no resources surface is exposed yet;
 - no diff tool exists yet;
-- extension-managed MCP registration currently expects `local-history-mcp` to be available in `PATH`; packaged release bootstrap for the MCP binary still needs live validation.
+- extension-managed MCP release bootstrap still needs live validation against a real tagged GitHub Release.
 
 ## Zed usage
 
@@ -595,7 +597,9 @@ cargo run -p xtask -- zed-ci
 - otherwise downloads and caches the matching GitHub release asset;
 - verifies sidecar version compatibility before use;
 - runs focused sidecar commands from slash handlers;
-- registers the `local-history` MCP context server for Agent Panel tool use when `local-history-mcp` is available in `PATH`.
+- registers the `local-history` MCP context server for Agent Panel tool use;
+- resolves `local-history-mcp` from `PATH` for development workflows, otherwise downloads and caches the matching GitHub release asset;
+- verifies MCP binary version compatibility before launching the context server.
 
 ### Current slash commands
 
@@ -721,7 +725,7 @@ Delete all history by removing the whole base `local-history` directory.
 
 ### Unsupported platform in Zed bootstrap
 
-Current sidecar bootstrap contract covers:
+Current Zed binary bootstrap contract covers sidecar and MCP assets for:
 
 - macOS `x86_64`
 - macOS `aarch64`

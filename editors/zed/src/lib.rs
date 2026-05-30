@@ -10,6 +10,7 @@ const SIDECAR_BINARY_STEM: &str = "local-history-sidecar";
 const MCP_BINARY_STEM: &str = "local-history-mcp";
 const MCP_CONTEXT_SERVER_ID: &str = "local-history";
 const MINIMUM_COMPATIBLE_SIDECAR_VERSION: &str = "0.1.0";
+const MINIMUM_COMPATIBLE_MCP_VERSION: &str = "0.1.0";
 
 struct LocalHistoryExtension;
 
@@ -149,7 +150,7 @@ impl zed::Extension for LocalHistoryExtension {
         }
 
         Ok(zed::Command {
-            command: MCP_BINARY_STEM.to_string(),
+            command: resolve_mcp_binary()?,
             args: Vec::new(),
             env: Vec::new(),
         })
@@ -258,7 +259,62 @@ fn resolve_sidecar_binary(worktree: &zed::Worktree) -> Result<String, String> {
     }
 }
 
+fn resolve_mcp_binary() -> Result<String, String> {
+    let (os, architecture) = zed::current_platform();
+
+    if let Some(path) = mcp_on_path(os) {
+        if mcp_is_compatible(&path)? {
+            return Ok(path);
+        }
+    }
+
+    let target = mcp_release_target(os, architecture)?;
+    let cached_path = cached_mcp_path(target);
+
+    if binary_exists(&cached_path) {
+        ensure_binary_executable(target, &cached_path)?;
+
+        if mcp_is_compatible(&cached_path)? {
+            return Ok(cached_path);
+        }
+    }
+
+    install_mcp_release(target)?;
+    ensure_binary_executable(target, &cached_path)?;
+
+    if binary_exists(&cached_path) {
+        let version = mcp_version(&cached_path)?;
+
+        if is_compatible_mcp_version(&version)? {
+            Ok(cached_path)
+        } else {
+            Err(incompatible_mcp_error(&cached_path, &version))
+        }
+    } else {
+        Err(format!(
+            "downloaded `{}` for {}, but `{cached_path}` was not found after extraction",
+            target.archive_name, target.platform_label,
+        ))
+    }
+}
+
 fn install_sidecar_release(target: ReleaseTarget) -> Result<(), String> {
+    install_release_asset(
+        target,
+        &sidecar_install_directory_name(),
+        "local-history-sidecar-",
+    )
+}
+
+fn install_mcp_release(target: ReleaseTarget) -> Result<(), String> {
+    install_release_asset(target, &mcp_install_directory_name(), "local-history-mcp-")
+}
+
+fn install_release_asset(
+    target: ReleaseTarget,
+    install_dir: &str,
+    cleanup_prefix: &str,
+) -> Result<(), String> {
     let release =
         zed::github_release_by_tag_name(RELEASE_REPOSITORY, &release_tag()).map_err(|error| {
             format!(
@@ -271,11 +327,10 @@ fn install_sidecar_release(target: ReleaseTarget) -> Result<(), String> {
         .iter()
         .find(|asset| asset.name == target.archive_name)
         .ok_or_else(|| missing_asset_error(target, &release))?;
-    let install_dir = install_directory_name();
 
-    zed::download_file(&asset.download_url, &install_dir, target.file_type)
+    zed::download_file(&asset.download_url, install_dir, target.file_type)
         .map_err(|error| format!("failed to download {}: {error}", asset.name))?;
-    cleanup_old_installs(&install_dir)?;
+    cleanup_old_installs(cleanup_prefix, install_dir)?;
 
     Ok(())
 }
@@ -294,6 +349,41 @@ fn sidecar_version(worktree: &zed::Worktree, binary: &str) -> Result<String, Str
         .ok_or_else(|| format!("`{binary} version` did not return `sidecar_version`"))
 }
 
+fn mcp_is_compatible(binary: &str) -> Result<bool, String> {
+    match mcp_version(binary) {
+        Ok(version) => is_compatible_mcp_version(&version),
+        Err(_) => Ok(false),
+    }
+}
+
+fn mcp_version(binary: &str) -> Result<String, String> {
+    let output = ProcessCommand::new(binary)
+        .args(["--version"])
+        .output()
+        .map_err(|error| format!("failed to execute `{binary} --version`: {error}"))?;
+
+    if output.status != Some(0) {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let message = if stderr.is_empty() {
+            "MCP binary version command failed without stderr output".to_string()
+        } else {
+            stderr
+        };
+
+        return Err(format!("`{binary} --version` failed: {message}"));
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| format!("MCP version output was not valid UTF-8: {error}"))?;
+    let version = stdout.trim();
+
+    if version.is_empty() {
+        Err(format!("`{binary} --version` returned an empty version"))
+    } else {
+        Ok(version.to_string())
+    }
+}
+
 fn sidecar_on_path(worktree: &zed::Worktree, os: Os) -> Option<String> {
     worktree.which(SIDECAR_BINARY_STEM).or_else(|| {
         if matches!(os, Os::Windows) {
@@ -304,13 +394,25 @@ fn sidecar_on_path(worktree: &zed::Worktree, os: Os) -> Option<String> {
     })
 }
 
+fn mcp_on_path(os: Os) -> Option<String> {
+    if mcp_is_compatible(MCP_BINARY_STEM).unwrap_or(false) {
+        return Some(MCP_BINARY_STEM.to_string());
+    }
+
+    if matches!(os, Os::Windows) && mcp_is_compatible("local-history-mcp.exe").unwrap_or(false) {
+        Some("local-history-mcp.exe".to_string())
+    } else {
+        None
+    }
+}
+
 fn ensure_binary_executable(target: ReleaseTarget, binary_path: &str) -> Result<(), String> {
     if matches!(target.file_type, DownloadedFileType::Zip) {
         return Ok(());
     }
 
     zed::make_file_executable(binary_path).map_err(|error| {
-        format!("failed to make downloaded sidecar executable at {binary_path}: {error}")
+        format!("failed to make downloaded binary executable at {binary_path}: {error}")
     })
 }
 
@@ -318,7 +420,7 @@ fn binary_exists(path: &str) -> bool {
     fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
 }
 
-fn cleanup_old_installs(current_install_dir: &str) -> Result<(), String> {
+fn cleanup_old_installs(prefix: &str, current_install_dir: &str) -> Result<(), String> {
     let entries = fs::read_dir(".")
         .map_err(|error| format!("failed to list extension work directory: {error}"))?;
 
@@ -326,13 +428,13 @@ fn cleanup_old_installs(current_install_dir: &str) -> Result<(), String> {
         let entry = entry.map_err(|error| format!("failed to read workdir entry: {error}"))?;
         let file_name = entry.file_name().to_string_lossy().into_owned();
 
-        if file_name.starts_with("local-history-sidecar-")
+        if file_name.starts_with(prefix)
             && file_name != current_install_dir
             && entry.path().is_dir()
         {
             fs::remove_dir_all(entry.path()).map_err(|error| {
                 format!(
-                    "failed to remove stale sidecar install {}: {error}",
+                    "failed to remove stale binary install {}: {error}",
                     file_name
                 )
             })?;
@@ -425,17 +527,81 @@ fn extension_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-fn install_directory_name() -> String {
+fn sidecar_install_directory_name() -> String {
     format!("local-history-sidecar-{}", env!("CARGO_PKG_VERSION"))
+}
+
+fn mcp_install_directory_name() -> String {
+    format!("local-history-mcp-{}", env!("CARGO_PKG_VERSION"))
 }
 
 fn cached_sidecar_path(target: ReleaseTarget) -> String {
     format!(
         "{}/{}/{}",
-        install_directory_name(),
+        sidecar_install_directory_name(),
         target.asset_stem,
         target.binary_name
     )
+}
+
+fn cached_mcp_path(target: ReleaseTarget) -> String {
+    format!(
+        "{}/{}/{}",
+        mcp_install_directory_name(),
+        target.asset_stem,
+        target.binary_name
+    )
+}
+
+fn mcp_release_target(os: Os, architecture: Architecture) -> Result<ReleaseTarget, String> {
+    match (os, architecture) {
+        (Os::Mac, Architecture::Aarch64) => Ok(ReleaseTarget {
+            platform_label: "macOS aarch64",
+            asset_stem: "local-history-mcp-aarch64-apple-darwin",
+            archive_name: "local-history-mcp-aarch64-apple-darwin.tar.gz",
+            binary_name: "local-history-mcp",
+            file_type: DownloadedFileType::GzipTar,
+        }),
+        (Os::Mac, Architecture::X8664) => Ok(ReleaseTarget {
+            platform_label: "macOS x86_64",
+            asset_stem: "local-history-mcp-x86_64-apple-darwin",
+            archive_name: "local-history-mcp-x86_64-apple-darwin.tar.gz",
+            binary_name: "local-history-mcp",
+            file_type: DownloadedFileType::GzipTar,
+        }),
+        (Os::Linux, Architecture::Aarch64) => Ok(ReleaseTarget {
+            platform_label: "Linux aarch64",
+            asset_stem: "local-history-mcp-aarch64-unknown-linux-gnu",
+            archive_name: "local-history-mcp-aarch64-unknown-linux-gnu.tar.gz",
+            binary_name: "local-history-mcp",
+            file_type: DownloadedFileType::GzipTar,
+        }),
+        (Os::Linux, Architecture::X8664) => Ok(ReleaseTarget {
+            platform_label: "Linux x86_64",
+            asset_stem: "local-history-mcp-x86_64-unknown-linux-gnu",
+            archive_name: "local-history-mcp-x86_64-unknown-linux-gnu.tar.gz",
+            binary_name: "local-history-mcp",
+            file_type: DownloadedFileType::GzipTar,
+        }),
+        (Os::Windows, Architecture::Aarch64) => Ok(ReleaseTarget {
+            platform_label: "Windows aarch64",
+            asset_stem: "local-history-mcp-aarch64-pc-windows-msvc",
+            archive_name: "local-history-mcp-aarch64-pc-windows-msvc.zip",
+            binary_name: "local-history-mcp.exe",
+            file_type: DownloadedFileType::Zip,
+        }),
+        (Os::Windows, Architecture::X8664) => Ok(ReleaseTarget {
+            platform_label: "Windows x86_64",
+            asset_stem: "local-history-mcp-x86_64-pc-windows-msvc",
+            archive_name: "local-history-mcp-x86_64-pc-windows-msvc.zip",
+            binary_name: "local-history-mcp.exe",
+            file_type: DownloadedFileType::Zip,
+        }),
+        _ => Err(format!(
+            "local-history MCP bootstrap is not defined for {}",
+            platform_label(os, architecture)
+        )),
+    }
 }
 
 fn release_target(os: Os, architecture: Architecture) -> Result<ReleaseTarget, String> {
@@ -507,11 +673,24 @@ fn is_compatible_sidecar_version(version: &str) -> Result<bool, String> {
     Ok(parse_semver_triplet(version)? >= parse_semver_triplet(MINIMUM_COMPATIBLE_SIDECAR_VERSION)?)
 }
 
+fn is_compatible_mcp_version(version: &str) -> Result<bool, String> {
+    Ok(parse_semver_triplet(version)? >= parse_semver_triplet(MINIMUM_COMPATIBLE_MCP_VERSION)?)
+}
+
 fn incompatible_sidecar_error(binary: &str, version: &str) -> String {
     format!(
         "local-history extension {} requires sidecar >= {}, but `{binary}` reports {}",
         extension_version(),
         MINIMUM_COMPATIBLE_SIDECAR_VERSION,
+        version
+    )
+}
+
+fn incompatible_mcp_error(binary: &str, version: &str) -> String {
+    format!(
+        "local-history extension {} requires MCP binary >= {}, but `{binary}` reports {}",
+        extension_version(),
+        MINIMUM_COMPATIBLE_MCP_VERSION,
         version
     )
 }
@@ -587,8 +766,9 @@ fn json_value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
 #[cfg(test)]
 mod tests {
     use super::{
-        extension_version, install_directory_name, is_compatible_sidecar_version,
-        parse_semver_triplet, release_tag, release_target, ReleaseTarget,
+        extension_version, is_compatible_mcp_version, is_compatible_sidecar_version,
+        mcp_install_directory_name, mcp_release_target, parse_semver_triplet, release_tag,
+        release_target, sidecar_install_directory_name, ReleaseTarget,
     };
     use zed_extension_api::{Architecture, DownloadedFileType, Os};
 
@@ -602,6 +782,36 @@ mod tests {
                 archive_name: "local-history-sidecar-x86_64-unknown-linux-gnu.tar.gz",
                 binary_name: "local-history-sidecar",
                 file_type: DownloadedFileType::GzipTar,
+            }
+        );
+    }
+
+    #[test]
+    fn maps_linux_mcp_release_target() {
+        assert_eq!(
+            mcp_release_target(Os::Linux, Architecture::X8664)
+                .expect("linux MCP target must exist"),
+            ReleaseTarget {
+                platform_label: "Linux x86_64",
+                asset_stem: "local-history-mcp-x86_64-unknown-linux-gnu",
+                archive_name: "local-history-mcp-x86_64-unknown-linux-gnu.tar.gz",
+                binary_name: "local-history-mcp",
+                file_type: DownloadedFileType::GzipTar,
+            }
+        );
+    }
+
+    #[test]
+    fn maps_windows_arm_mcp_release_target() {
+        assert_eq!(
+            mcp_release_target(Os::Windows, Architecture::Aarch64)
+                .expect("windows arm MCP target must exist"),
+            ReleaseTarget {
+                platform_label: "Windows aarch64",
+                asset_stem: "local-history-mcp-aarch64-pc-windows-msvc",
+                archive_name: "local-history-mcp-aarch64-pc-windows-msvc.zip",
+                binary_name: "local-history-mcp.exe",
+                file_type: DownloadedFileType::Zip,
             }
         );
     }
@@ -639,7 +849,11 @@ mod tests {
     fn version_helpers_follow_package_version() {
         assert_eq!(release_tag(), "v0.1.0");
         assert_eq!(extension_version(), "0.1.0");
-        assert_eq!(install_directory_name(), "local-history-sidecar-0.1.0");
+        assert_eq!(
+            sidecar_install_directory_name(),
+            "local-history-sidecar-0.1.0"
+        );
+        assert_eq!(mcp_install_directory_name(), "local-history-mcp-0.1.0");
     }
 
     #[test]
@@ -668,6 +882,15 @@ mod tests {
         );
         assert!(!is_compatible_sidecar_version("0.0.9")
             .expect("older sidecar version must be incompatible"));
+    }
+
+    #[test]
+    fn compatibility_check_uses_minimum_mcp_version() {
+        assert!(is_compatible_mcp_version("0.1.0").expect("matching version must be compatible"));
+        assert!(is_compatible_mcp_version("0.1.5").expect("newer patch version must be compatible"));
+        assert!(
+            !is_compatible_mcp_version("0.0.9").expect("older MCP version must be incompatible")
+        );
     }
 }
 

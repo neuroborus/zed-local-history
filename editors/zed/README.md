@@ -17,14 +17,14 @@ Zed's documented MCP server support also creates a second integration route: the
 ## Current shape
 
 - `extension.toml` declares the extension manifest, the `local-history` context server, and slash commands.
-- `src/lib.rs` resolves `local-history-sidecar` from `PATH` for dev installs, otherwise downloads a matching GitHub release asset into the extension work directory, verifies sidecar version compatibility, calls real sidecar commands from slash-command handlers, and starts `local-history-mcp` for Agent Panel tool use when that binary is in `PATH`.
+- `src/lib.rs` resolves `local-history-sidecar` and `local-history-mcp` from `PATH` for dev installs, otherwise downloads matching GitHub release assets into the extension work directory, verifies binary version compatibility, calls real sidecar commands from slash-command handlers, and starts the MCP server for Agent Panel tool use.
 - The extension is kept outside the root workspace because it follows Zed's WebAssembly packaging model and will evolve on its own cadence.
 
 ## Planned responsibilities
 
 - detect platform and architecture;
-- locate or download the correct sidecar release artifact;
-- make the sidecar executable where needed;
+- locate or download the correct sidecar and MCP release artifacts;
+- make downloaded binaries executable where needed;
 - run focused sidecar commands such as `ensure-daemon`, `status`, and Markdown view lookups;
 - expose the most useful recovery flows through Zed-supported extension surfaces.
 - register the existing `local-history-mcp` server for Agent Panel MCP tool use.
@@ -53,15 +53,15 @@ Current behavior:
 - `current-hour`, `current-segment`, `previous-hour`, `hour`, and `segment` call sidecar Markdown render commands and return the generated file path
 - `restore` calls `local-history-sidecar restore <snapshot-id-or-unique-prefix>`
 - the extension probes `local-history-sidecar version` before use; if a `PATH` binary is missing or too old, it falls back to the cached/downloaded release asset for the current extension version
+- the extension probes `local-history-mcp --version` before Agent Panel launch and uses the same `PATH` first, cached/downloaded release asset second behavior
 - tagged releases publish `SHA256SUMS.txt` alongside the archives that the extension bootstrap relies on
 - release bootstrap currently has explicit asset mappings for macOS `x86_64` / `aarch64`, Linux `x86_64` / `aarch64`, and Windows `x86_64` / `aarch64`
-- the extension registers `local-history` as a context server and starts `local-history-mcp` from `PATH`
+- the extension registers `local-history` as a context server and starts the resolved `local-history-mcp` binary
 
 Current limitations:
 
 - the extension API does not provide a direct "open arbitrary external file path" action, so the MVP path is to expose the generated Markdown path instead of pretending it can always auto-open it
-- sidecar bootstrap currently depends on GitHub release assets with stable names; the workflow now produces those assets plus release checksums, but the full packaging/release story still belongs to later-stage release hardening
-- extension-managed MCP registration currently expects `local-history-mcp` to be available in `PATH`; packaged release bootstrap for the MCP binary still needs live validation
+- binary bootstrap currently depends on GitHub release assets with stable names; the workflow now produces sidecar and MCP bootstrap assets plus release checksums, but the full packaging/release story still needs live tagged-release validation
 - `x86_64-unknown-linux-musl` is still not part of the extension bootstrap contract because the current platform mapping distinguishes OS and CPU architecture, not Linux libc family
 
 The current MCP server can also coexist with these slash commands through direct `context_servers` configuration if users prefer an explicit binary path.
