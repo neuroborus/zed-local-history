@@ -1,6 +1,6 @@
 # zed-local-history LLM Guide
 
-This file is the compact operating guide for coding agents and MCP clients that need to understand `zed-local-history`.
+This file is the compact operating guide for coding agents. It covers MCP tool use when available and CLI shell use when MCP tools are not exposed.
 
 ## Product Intent
 
@@ -152,11 +152,21 @@ local-history-sidecar render-markdown previous-hour /path/to/project
 
 `local-history diff <snapshot-id-or-prefix>` compares the snapshot to the current live file and prints a unified text diff. The direction is snapshot to current file.
 
-## MCP Agent Use
+## Agent Workflows
 
-The Zed Agent Panel uses MCP tools, not extension slash commands.
+Coding agents may integrate through MCP tools, through shell access to the CLI, or through both. Do not assume every agent host exposes MCP. Many agent hosts only provide shell access to `local-history` without `local_history_*` MCP tools.
 
-Current MCP tools:
+### Choose the integration surface
+
+1. If `local_history_*` MCP tools are available in the current client, prefer the MCP workflow below.
+2. If MCP tools are not available but the shell can run `local-history`, use the CLI workflow below.
+3. If neither is available, ask the user to install the binaries or configure the `local-history-mcp` context server. Do not invent storage paths or restore behavior.
+
+Extension slash commands such as `/local-history-status` are Zed-only editor commands. They are not a substitute for MCP tools or CLI commands in agent chat.
+
+### MCP tool reference
+
+Available when a client registers `local-history-mcp` (for example Zed Agent Panel with the extension, or any host with `context_servers` / MCP tool access):
 
 - `local_history_guide`
 - `local_history_status`
@@ -167,23 +177,22 @@ Current MCP tools:
 - `local_history_restore_snapshot`
 - `local_history_prune`
 
-Current MCP resources:
+MCP resource:
 
-- `local-history://guide`
-  Complete read-only operating guide for storage, snapshot semantics, restore safety, Markdown browsing, CLI usage, MCP usage, and Zed integration boundaries. The same text is returned by `local_history_guide` for clients that expose tools more reliably than resources.
+- `local-history://guide` — same text as this file and `local_history_guide`.
 
-General MCP rules:
+MCP-specific rules:
 
-- Most tools require explicit `project_root`.
-- Use absolute project roots when possible.
+- Most tools require explicit absolute `project_root`.
 - `data_dir` is optional and normally omitted.
 - Snapshot view, diff, and restore accept a full snapshot ID or unique prefix.
 - `local_history_recent_snapshots` returns raw snapshots by default. Set `include_safety` only when safety snapshots are needed.
 - `local_history_restore_snapshot` always creates a safety snapshot before writing the live file.
 - `local_history_diff_snapshot` returns unified text diff from snapshot to current live file and sets `unchanged` when they match.
 - `local_history_prune` applies retention and rebuilds the Markdown view.
+- MCP does not currently expose undo, prompts, or watcher start tools.
 
-Recommended agent sequence:
+Recommended MCP sequence:
 
 1. Call `local_history_guide` or read `local-history://guide` when the operating model is unclear.
 2. Call `local_history_status` for the project root.
@@ -192,15 +201,46 @@ Recommended agent sequence:
 5. Call `local_history_diff_snapshot` when you need a unified text diff from snapshot to the current live file.
 6. Call `local_history_restore_snapshot` only after the target is clear.
 7. Tell the user the `safety_snapshot_id` from restore output.
-8. If the restore was wrong, use the CLI `local-history undo-restore <project-root>` because MCP does not expose undo yet.
+8. If the restore was wrong, use CLI `local-history undo-restore <project-root>` because MCP does not expose undo yet.
 
-MCP does not currently expose undo, prompts, or watcher start tools. The guide is available through `local_history_guide` and `local-history://guide`.
+### CLI shell reference
+
+Use this workflow when the agent only has terminal access and no `local_history_*` MCP tools are available.
+
+Equivalent commands:
+
+| Goal | MCP tool | CLI command |
+|------|----------|-------------|
+| Read this guide | `local_history_guide` / `local-history://guide` | read repo `llms.txt` if present |
+| Project status | `local_history_status` | `local-history status <project-root>` |
+| Manual snapshot | `local_history_create_snapshot` | `local-history snapshot <project-root> --file <relative-path>` |
+| Recent snapshots | `local_history_recent_snapshots` | `local-history recent <project-root>` |
+| Snapshot metadata/preview | `local_history_view_snapshot` | `local-history show <snapshot-id-or-prefix>` |
+| Unified diff vs live file | `local_history_diff_snapshot` | `local-history diff <snapshot-id-or-prefix>` |
+| Restore snapshot | `local_history_restore_snapshot` | `local-history restore <snapshot-id-or-prefix>` or `local-history restore --project-root <path> --recent <n>` |
+| Prune retention | `local_history_prune` | `local-history prune <project-root>` |
+| Undo last restore | not exposed in MCP | `local-history undo-restore <project-root>` |
+| Start/verify watcher | not exposed in MCP | `local-history-sidecar ensure-daemon <project-root>` then `local-history-sidecar status <project-root>` |
+
+Recommended CLI sequence:
+
+1. Read `llms.txt` or project docs when the operating model is unclear.
+2. Run `local-history status <project-root>`.
+3. Run `local-history recent <project-root>` (or `local-history list <project-root>` with filters).
+4. Run `local-history show <snapshot-id-or-prefix>` before restore unless the user already selected an exact snapshot.
+5. Run `local-history diff <snapshot-id-or-prefix>` when you need a unified text diff against the current live file.
+6. Run `local-history restore ...` only after the target is clear.
+7. Tell the user that restore creates a safety snapshot first; use `local-history undo-restore <project-root>` if the restore was wrong.
+
+Use absolute project roots in CLI commands when possible. Parse command output directly; do not guess snapshot IDs from Markdown alone if a command can verify them.
 
 ## Zed Extension Notes
 
-Extension slash commands such as `/local-history-status` are not Agent Panel chat commands. They only work in Zed surfaces that support extension slash commands.
+The Zed Agent Panel uses MCP tools, not extension slash commands, when the extension registers `local-history-mcp`.
 
-For Agent Panel workflows, use the automatically registered `local-history` MCP context server. Production extension use should resolve/download/cache `local-history-mcp`; normal users should not need to put `local-history-mcp` in `PATH`.
+Production Zed extension use should resolve/download/cache `local-history-mcp`; normal users should not need to put `local-history-mcp` in `PATH`.
+
+For Agent Panel workflows in Zed, ask in natural language, for example: "Show local-history status for `/absolute/path/to/project`."
 
 The current Zed extension API cannot directly open arbitrary external file paths in every supported workflow. The extension therefore returns or reveals generated Markdown paths. Users can open those paths manually in Zed.
 
@@ -220,5 +260,5 @@ The current Zed extension API cannot directly open arbitrary external file paths
 - `agents/AGENTS.md`: contributor and coding-agent working rules.
 - `agents/GOALS.md`: product boundaries and architecture rationale.
 - `agents/DEVELOPMENT_PLAN.md`: roadmap, completion status, external validation plan.
-- `agents/ZED_MANUAL_TESTING.md`: manual Zed and MCP acceptance flow.
+- `agents/ZED_MANUAL_TESTING.md`: manual Zed, MCP, and CLI-only agent acceptance flow.
 - `crates/*/README.md`: crate responsibilities and ownership boundaries.

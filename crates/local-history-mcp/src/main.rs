@@ -19,7 +19,9 @@ const WATCHER_STALE_AFTER_SECONDS: u64 = 5;
 const AGENT_GUIDE_URI: &str = "local-history://guide";
 const AGENT_GUIDE_TEXT: &str = include_str!("../../../llms.txt");
 const SERVER_INSTRUCTIONS: &str = "\
-Use these tools for filesystem-first local history recovery.
+Use these tools for filesystem-first local history recovery when the client exposes them.
+
+If the client does not expose local_history_* tools but can run shell commands, use the CLI equivalents documented in local_history_guide / local-history://guide instead of guessing behavior.
 
 Core rules:
 - Most tools require an explicit absolute project_root.

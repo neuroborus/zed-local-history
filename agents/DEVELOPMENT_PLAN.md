@@ -1086,7 +1086,8 @@ Implementation:
 - expose the same guide through a read-only `local_history_guide` MCP tool;
 - expose the same guide through MCP as `local-history://guide`;
 - include safety-first restore and previous-state snapshot rules in MCP initialize instructions;
-- document that Zed Agent Panel uses MCP tools, not extension slash commands;
+- document capability-based agent integration: MCP tools when exposed, CLI shell workflow when not;
+- document that Zed Agent Panel uses MCP tools, not extension slash commands, when MCP is available;
 - keep the guide aligned with README, crate READMEs, and manual testing docs.
 
 Acceptance:

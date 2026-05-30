@@ -4,6 +4,7 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-30
 
+- Made agent guidance capability-based in `llms.txt`, MCP `SERVER_INSTRUCTIONS`, `README.md`, and `ZED_MANUAL_TESTING.md`. MCP tools are preferred when exposed; shell-only agents should use the documented CLI mapping instead of assuming `local_history_*` tools exist.
 - Added MCP unified diff in the Stage 13.2 diff slice. `local_history_diff_snapshot` reuses `local-history-core` diff logic, sits between view and restore in the MCP tool list, and returns the same unified text diff as CLI `local-history diff`.
 - Added CLI unified diff in the first post-MVP diff slice. `local-history diff <snapshot-id-or-unique-prefix>` compares a text snapshot to the current live file, reports binary and missing-file states clearly, and shares diff logic with MCP through `local-history-core`.
 - Added MCP agent operating context in Stage 11.3.3. Root `llms.txt` is now the maintained agent guide, packaged into `local-history-mcp` as `local-history://guide`, exposed through the read-only `local_history_guide` tool, and summarized in expanded MCP initialize instructions.

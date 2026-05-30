@@ -72,7 +72,7 @@ For contributor setup and manual Zed validation, use [agents/ZED_MANUAL_TESTING.
 - can undo the last restore;
 - prunes old or excess history while preserving the latest restore/undo chain needed for recovery;
 - integrates with Zed through slash commands and sidecar bootstrap;
-- exposes MCP tools for agent clients such as the Zed Agent Panel.
+- exposes MCP tools for agent clients that register `local-history-mcp`, and supports shell-only agents through the CLI workflow in [llms.txt](llms.txt).
 
 ## Current surfaces
 
@@ -490,7 +490,13 @@ Current tool contract:
 - `local_history_restore_snapshot` remains safety-first and creates a safety snapshot before writing the live file;
 - `local_history_diff_snapshot` returns unified text diff from snapshot to the current live file for the same snapshot ID or unique prefix accepted by view/restore, plus `unchanged` when the live file matches the snapshot.
 
-### Zed Agent Panel usage
+### Agent usage
+
+Agents integrate through MCP tools when available, or through shell CLI commands when not. See [llms.txt](llms.txt) for the capability-based workflow and MCP-to-CLI mapping.
+
+#### When MCP tools are available
+
+Typical hosts: Zed Agent Panel with the extension, or any client that registers `local-history-mcp`.
 
 The Zed Agent Panel uses MCP tools, not extension slash commands.
 
@@ -502,7 +508,7 @@ Ask the Agent in natural language:
 Use local-history to show status for /absolute/path/to/project.
 ```
 
-If you want to configure the MCP server manually instead, point Zed at an installed or unpacked `local-history-mcp` executable:
+If you want to configure the MCP server manually instead, point the host at an installed or unpacked `local-history-mcp` executable:
 
 ```json
 {
@@ -514,6 +520,22 @@ If you want to configure the MCP server manually instead, point Zed at an instal
   }
 }
 ```
+
+#### When only shell/CLI is available
+
+Typical hosts: coding agents with terminal access but no `local_history_*` MCP tools.
+
+Use the CLI workflow from [llms.txt](llms.txt), for example:
+
+```bash
+local-history status /absolute/path/to/project
+local-history recent /absolute/path/to/project
+local-history show <snapshot-id-or-unique-prefix>
+local-history diff <snapshot-id-or-unique-prefix>
+local-history restore <snapshot-id-or-unique-prefix>
+```
+
+Do not assume MCP tools exist in every agent session. Prefer verified CLI output when MCP is unavailable.
 
 Current release contract:
 
@@ -528,19 +550,17 @@ Examples of requests that map well to the current tool surface:
 - "Create a snapshot of `src/lib.rs` under `/absolute/path/to/project`."
 - "List the last 10 local-history snapshots for `/absolute/path/to/project`."
 - "Show snapshot `<snapshot-id>`."
+- "Diff snapshot `<snapshot-id>` against the current live file."
 - "Restore snapshot `<snapshot-id>`."
 - "Prune local history for `/absolute/path/to/project`."
 
-For code-level diffs, use the CLI:
-
-```bash
-local-history diff <snapshot-id-or-unique-prefix>
-```
+Agents without MCP should run the equivalent CLI commands listed in [llms.txt](llms.txt).
 
 ### Current MCP limitations
 
 - no prompts surface is exposed yet;
-- no MCP diff tool exists yet;
+- no MCP undo-restore tool yet; use CLI `local-history undo-restore`;
+- no MCP watcher-start tool yet; use `local-history-sidecar ensure-daemon`;
 - extension-managed MCP release bootstrap still needs live validation against a real tagged GitHub Release.
 
 ## Zed usage
@@ -699,7 +719,7 @@ Current limitation:
 - project-local custom ignore files are not wired yet;
 - the Zed extension reveals Markdown paths instead of directly opening arbitrary external files;
 - release workflow and extension bootstrap still need live external validation on a real tagged release;
-- the MCP server still needs live validation inside a real Zed Agent `context_servers` setup and does not yet expose prompts or diff tools.
+- the MCP server still needs live validation inside a real Zed Agent `context_servers` setup and does not yet expose prompts, undo-restore, or watcher-start tools through MCP.
 
 ## Repository layout
 

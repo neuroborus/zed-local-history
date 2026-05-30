@@ -1,8 +1,39 @@
 # Zed Manual Testing Guide
 
-This document is the manual acceptance checklist for `zed-local-history` in a real Zed install.
+This document is the manual acceptance checklist for `zed-local-history` in a real Zed install and for CLI-only agent hosts without `local-history-mcp` tools.
 
 Local dev details such as `cargo build`, `target/debug`, and shell `PATH` setup live here instead of the root README.
+
+Capability-based agent guidance lives in [llms.txt](../llms.txt): use MCP tools when the client exposes them; otherwise use the CLI mapping in that file.
+
+## CLI-only Agent Testing
+
+Use this section when the agent host has shell access to `local-history` but no `local_history_*` MCP tools.
+
+Prerequisites:
+
+```bash
+export REPO=/path/to/zed-local-history
+export TEST_PROJECT=/tmp/lh-agent-cli
+export PATH="$HOME/.cargo/bin:$REPO/target/debug:$PATH"
+mkdir -p "$TEST_PROJECT/src"
+echo 'v1' > "$TEST_PROJECT/note.txt"
+local-history-sidecar ensure-daemon "$TEST_PROJECT"
+# edit and save note.txt to v2 so a raw snapshot exists
+```
+
+Ask the agent to recover history using **CLI commands only**, for example:
+
+```text
+Use local-history CLI commands to show status, list recent snapshots, show the latest snapshot for note.txt, diff it against the live file, and explain whether restore would be safe. Project root: /tmp/lh-agent-cli
+```
+
+Expected:
+
+- the agent runs `local-history status`, `local-history recent`, `local-history show`, and `local-history diff` via shell;
+- the agent does not claim MCP tools ran if they are unavailable;
+- restore is not performed unless explicitly requested;
+- if restore is performed, the agent mentions safety snapshot behavior and `local-history undo-restore` as the rollback path.
 
 ## Local Dev Shell Setup
 
@@ -42,7 +73,7 @@ Extension slash commands such as `/local-history-status` are **not** shell comma
 | Integrated terminal (bash) | **No** | `/local-history-status` is interpreted as a filesystem path; expect `No such file or directory`. Use `local-history-sidecar` instead. |
 | Agent Panel → default thread (`Zed Agent`, `agent: new thread`) | **No** | The input hint says `/ for commands`, but that menu is for **built-in and agent** slash commands (`/file`, `/terminal`, …), not extension commands. The Agent may report `/local-history-status` as unrecognized. |
 | Agent Panel → **Text Thread** | **Yes** (when available) | Type `/` at the **start of a line** in the text-thread editor buffer. Extension commands should appear in the completion list. |
-| MCP in Agent Panel | **N/A** | Agent workflows use MCP tools (`local_history_status`, …), not extension slash commands. See [MCP Test In Zed Agent](#mcp-test-in-zed-agent). |
+| MCP in Agent Panel | **N/A** | When MCP tools are available, use `local_history_*` tools. When not, use the [CLI-only agent flow](#cli-only-agent-testing). |
 
 ### Opening a Text Thread (optional UI path)
 
@@ -457,6 +488,8 @@ Expected:
 - `note.txt` returns to the state it had before the restore.
 
 ## MCP Test In Zed Agent
+
+This section is for Zed Agent Panel hosts that expose `local_history_*` MCP tools. For shell-only agents without MCP tools, use [CLI-only Agent Testing](#cli-only-agent-testing) instead.
 
 The Zed Agent Panel uses MCP tools. It does **not** run extension slash commands such as `/local-history-status` from the agent chat input, even when the input hint mentions `/ for commands`.
 

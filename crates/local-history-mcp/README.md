@@ -4,7 +4,7 @@ MCP stdio adapter for agent-facing local-history tools.
 
 ## Responsibility
 
-`local-history-mcp` exposes local-history behavior to MCP clients such as the Zed Agent Panel:
+`local-history-mcp` exposes local-history behavior to MCP clients. Agents without MCP tools should use the CLI workflow documented in root `llms.txt`.
 
 - JSON-RPC stdio server lifecycle;
 - MCP initialize, ping, tools/list, tools/call, resources/list, and resources/read handling;
@@ -37,6 +37,8 @@ MCP stdio adapter for agent-facing local-history tools.
 - Zed Agent Panel through extension-managed MCP registration.
 - Manual `context_servers` configuration when an explicit binary path is preferred.
 - Other MCP clients that can launch a stdio server.
+
+Agents in hosts without MCP should follow the CLI mapping in `llms.txt` instead of expecting these tools.
 
 ## Validation
 
