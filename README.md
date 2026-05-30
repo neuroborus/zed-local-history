@@ -541,7 +541,7 @@ Current tool contract:
 
 ### Agent usage
 
-Agents integrate through MCP tools when available, or through shell CLI commands when not. See [llms.txt](llms.txt) for the capability-based workflow, MCP-to-CLI mapping, and **natural-language intent mapping** (for example: "what changed" / "summary of changes" / "edit history" → recent snapshots, then diff or view — especially when Git is unavailable or the question is about saved file states, not commits).
+Agents integrate through MCP tools when available, or through shell CLI commands when not. Runtime routing and intent mapping live in [llms.txt](llms.txt); [Examples](#examples) above show the three main surfaces.
 
 #### When MCP tools are available
 

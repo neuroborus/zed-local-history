@@ -19,15 +19,11 @@ Rust sidecar
 
 The Zed extension should install/start the sidecar and make generated Markdown history easy to open inside Zed.
 
-The architecture should also leave room for a local MCP server so Zed's Agent Panel can call local-history tools directly without replacing the CLI workflow. This is an additive integration concern, not a numbered MVP stage.
+The repository includes an additive MCP server (`local-history-mcp`) so agent clients such as the Zed Agent Panel can call local-history tools without replacing the CLI workflow.
 
-## Additional Architecture Note — MCP Surface
+## MCP Surface (implemented)
 
-Alongside the MVP surfaces, the repository should leave room for an MCP server adapter that exposes local-history tools to agent clients such as the Zed Agent Panel.
-
-This is not a numbered roadmap stage and not a replacement for the CLI. It is an additional integration surface.
-
-If added, the intended shape is:
+`local-history-mcp` is an additional integration surface, not a replacement for the CLI.
 
 ```text
 crates/
@@ -36,10 +32,11 @@ crates/
   local-history-mcp/
 ```
 
-The MCP layer should stay thin and adapt protocol calls to existing core or sidecar behavior.
+The MCP layer stays thin and adapts protocol calls to `local-history-core` (not a second storage implementation).
 
-First implemented MCP tool slice:
+Current MCP tool surface:
 
+- `local_history_guide`
 - `local_history_status`
 - `local_history_create_snapshot`
 - `local_history_recent_snapshots`
@@ -48,7 +45,9 @@ First implemented MCP tool slice:
 - `local_history_restore_snapshot`
 - `local_history_prune`
 
-If exposed through Zed, it may be connected either:
+MCP resources: `local-history://guide` (same text as `llms.txt`).
+
+In Zed, MCP may be connected either:
 
 - directly through user `context_servers` settings; or
 - through extension-managed registration in `extension.toml`.
@@ -1106,6 +1105,7 @@ Local implementation status:
 - implemented in `local-history-mcp`;
 - root `llms.txt` added and packaged into the MCP binary;
 - natural-language intent mapping lives in `llms.txt` and a condensed form in MCP `SERVER_INSTRUCTIONS`;
+- guide trimmed to agent-ops essentials; README [Examples](../README.md#examples) and `docs/` GIFs cover user-facing demos;
 - read-only `local_history_guide` tool added for clients that surface tools more reliably than resources;
 - README and agent docs reference the guide;
 - live Agent Panel validation remains tracked under the external validation plan.
@@ -1260,18 +1260,18 @@ Add optional grouping by:
 
 ### 13.2 Better diff support
 
-Add:
+**Implemented (Stage 13.2 first slice):**
 
-- generated diff Markdown;
+- CLI `local-history diff <snapshot-id-or-unique-prefix>` for text snapshots against the current live file;
+- MCP `local_history_diff_snapshot` with the same unified diff and an `unchanged` flag;
+- shared diff logic in `local-history-core`;
+- binary snapshots reported as unsupported for textual diff.
+
+**Still post-MVP:**
+
+- generated diff Markdown pages;
 - temporary files for manual comparison;
 - native side-by-side diff if Zed exposes a suitable API.
-
-Local implementation status:
-
-- CLI `local-history diff <snapshot-id-or-unique-prefix>` is implemented for text snapshots against the current live file;
-- MCP `local_history_diff_snapshot` exposes the same unified text diff through the Agent Panel;
-- binary diffs are intentionally reported as unsupported textual diffs;
-- Markdown and native Zed diff surfaces remain post-MVP improvements.
 
 ### 13.3 Native Zed UI if supported
 
@@ -1369,8 +1369,8 @@ Because the sidecar is editor-independent, support can be added for:
 - [x] MCP initialize returns operating instructions.
 - [x] MCP exposes `local_history_guide`.
 - [x] MCP exposes `local-history://guide`.
-- [x] Agent guide explains storage, snapshot semantics, Markdown browsing, restore safety, and MCP usage.
-- [x] Agent guide is packaged into the MCP binary.
+- [x] Agent guide explains storage, previous-state snapshots, restore safety, Git vs local-history routing, natural-language intent mapping, and MCP or CLI usage.
+- [x] Agent guide is packaged into the MCP binary (~115 lines; contributor architecture lives in `GOALS.md`, not `llms.txt`).
 
 ## Release
 
@@ -1580,22 +1580,24 @@ Validate the additive MCP surface in a real agent client, not only through local
 5. Verify `tools/list` exposes the expected local-history tools.
 6. Verify `tools/call` for `local_history_guide` returns the guide text.
 7. Verify `resources/list` exposes `local-history://guide`.
-8. Verify `resources/read` returns the guide text and the agent can use it to explain restore safety and Markdown browsing.
+8. Verify `resources/read` returns the guide text and the agent can use it to explain restore safety, intent mapping, and when to prefer local-history over Git.
 9. Call:
    - `local_history_status`
    - `local_history_create_snapshot`
    - `local_history_recent_snapshots`
    - `local_history_view_snapshot`
+   - `local_history_diff_snapshot`
    - `local_history_restore_snapshot`
    - `local_history_prune`
-10. Confirm restore still creates a safety snapshot before modifying the live file.
-11. Verify destructive-tool approval behavior in the real Agent Panel settings.
+10. Ask a natural-language change-summary question (for example "what changed in this file recently?") and confirm the agent uses MCP tools rather than Git or the live file alone.
+11. Confirm restore still creates a safety snapshot before modifying the live file.
+12. Verify destructive-tool approval behavior in the real Agent Panel settings.
 
 ### Acceptance
 
 - Zed can start the MCP server successfully.
 - Production Agent Panel use does not require manual `PATH` setup for `local-history-mcp`.
 - The documented tools are available and callable.
-- The agent guide tool/resource is available and useful in a real Agent Panel session.
+- The agent guide tool/resource is available and useful in a real Agent Panel session, including natural-language intent routing from `llms.txt`.
 - Structured MCP output is usable by the agent.
 - Safety-first restore behavior is preserved through MCP.

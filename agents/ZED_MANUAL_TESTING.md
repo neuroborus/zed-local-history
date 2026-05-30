@@ -4,7 +4,9 @@ This document is the manual acceptance checklist for `zed-local-history` in a re
 
 Local dev details such as `cargo build`, `target/debug`, and shell `PATH` setup live here instead of the root README.
 
-Capability-based agent guidance lives in [llms.txt](../llms.txt): use MCP tools when the client exposes them; otherwise use the CLI mapping in that file. The guide includes natural-language intent mapping — for example "what changed" or "summary of changes" should route to `recent` then `diff`/`show`, especially when Git is unavailable or the question is about saved file states.
+User-facing demo GIFs live in [README Examples](../README.md#examples) (`docs/zed-lh-agent.gif`, `docs/zed-lh-cli.gif`, `docs/zed-lh-preview.gif`).
+
+Runtime agent guidance lives in [llms.txt](../llms.txt): use MCP tools when the client exposes them; otherwise use the CLI mapping in that file. The guide includes natural-language intent mapping — ask in plain language (change summary, preview, diff, restore, status, and so on); examples in the guide are illustrative, not an exhaustive command list.
 
 ## CLI-only Agent Testing
 
@@ -37,8 +39,8 @@ What changed in note.txt recently? There is no git history here. Project: /tmp/l
 Expected for change-summary intent:
 
 - the agent uses local-history (not only `git diff` or reading the live file);
-- the agent runs `recent` (or equivalent) and then `diff` or `show` on a relevant snapshot;
-- the answer summarizes snapshot-to-current differences in plain language.
+- the agent inspects recent snapshots and then diffs or previews a relevant one;
+- the answer summarizes differences in plain language.
 
 Expected for explicit recovery prompt:
 
@@ -576,7 +578,7 @@ What changed in note.txt recently? Summarize the differences from local history,
 
 Expected:
 
-- the Agent uses `local_history_recent_snapshots` and then `local_history_diff_snapshot` or `local_history_view_snapshot`;
+- the Agent uses local-history MCP tools for recent snapshots and then diff or view on a relevant snapshot;
 - the answer summarizes snapshot-to-current differences;
 - the Agent does not answer from the live file alone when snapshots exist.
 
