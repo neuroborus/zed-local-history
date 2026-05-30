@@ -81,6 +81,17 @@ For contributor setup and manual Zed validation, use [agents/ZED_MANUAL_TESTING.
 - `local-history-mcp`
   MCP stdio server for agent-facing tool calls.
 
+## Crate Responsibilities
+
+- [local-history-core](crates/local-history-core/README.md)
+  Core domain model, storage layout, SQLite metadata, content-addressed blobs, restore safety, retention, and Markdown rendering.
+- [local-history-cli](crates/local-history-cli/README.md)
+  User-facing terminal commands, human output, JSON output, interactive browse, and restore command ergonomics.
+- [local-history-sidecar](crates/local-history-sidecar/README.md)
+  Watcher runtime, daemon/status behavior, Zed-facing JSON command boundary, and render/restore wrappers used by the extension.
+- [local-history-mcp](crates/local-history-mcp/README.md)
+  MCP stdio JSON-RPC adapter, tool schemas, structured agent output, and agent-facing restore/status/listing tools.
+
 ## How it works
 
 1. The sidecar scans a project root and keeps an in-memory view of tracked files.
@@ -89,6 +100,27 @@ For contributor setup and manual Zed validation, use [agents/ZED_MANUAL_TESTING.
 4. Restore writes the chosen snapshot back to the live file only after creating a safety snapshot of the current state.
 5. Markdown generation reads from stored raw snapshots and writes history pages into external storage. Generated Markdown is not the source of truth.
 6. The MCP server maps tool calls onto the same storage and restore paths instead of becoming a second source of business logic.
+
+## History Storage And Markdown View
+
+Local history has two layers:
+
+- **Storage layer**: the durable source of truth. It lives outside the user repository under the platform data directory. Each project gets a stable project directory containing `metadata.sqlite`, compressed content-addressed blobs, generated `view/` files, and watcher logs.
+- **Markdown view**: a generated browsing layer. It is safe to delete and rebuild because it is derived from stored snapshots. It is not the database and it is not where snapshot contents are primarily stored.
+
+The watcher captures the previous known file state on save. For example, if `note.txt` starts as `v1`, then the user saves `v2`, the raw snapshot stores `v1`. If the user then saves `v3`, the next raw snapshot stores `v2`.
+
+Markdown is for browsing and copy/paste recovery:
+
+1. Generate or rebuild the view with `render-markdown` or `rebuild-markdown-view`.
+2. Open the returned Markdown path, or run `local-history view-root <project-root>` and open the generated `view/` tree.
+3. Navigate from the root index to a day/hour page, then to a fixed 10-minute segment, then to an exact snapshot page.
+4. Inspect the timestamp, file path, snapshot ID, and text preview.
+5. Restore with the shown restore command or copy the snapshot ID/prefix into `local-history restore`.
+
+Generated Markdown links use absolute local paths under `view/` so they keep working when an editor opens the Markdown outside the original project worktree.
+
+Generated Markdown can become stale after pruning. If a Markdown link no longer restores, confirm the snapshot still exists with `local-history show <snapshot-id-or-unique-prefix>` or `local-history recent <project-root>`.
 
 ## Quick start
 
@@ -317,6 +349,8 @@ Generated Markdown currently includes:
 - one `README.md` per hour;
 - six fixed segment pages per hour;
 - exact snapshot pages with metadata, restore command, and text preview when available.
+
+Use the Markdown pages as a filesystem browser for history. The exact snapshot page is the important restore target: it contains the durable snapshot ID and a restore command. The command still goes through `local-history restore`, so restore safety behavior is the same as CLI restore from `recent`.
 
 ### 9. Prune history
 

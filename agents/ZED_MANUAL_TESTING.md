@@ -337,6 +337,66 @@ Expected:
 
 Open the returned path manually (File → Open, or Command Palette → open file). The extension cannot open arbitrary external paths through the current Zed extension API.
 
+## Markdown Navigation And Restore Test
+
+This test validates the user-facing Markdown browsing model, not only that a file was generated.
+
+Print the generated view root:
+
+```bash
+local-history view-root "$TEST_PROJECT"
+```
+
+Expected:
+
+- output is an absolute path under the local-history data directory;
+- the path is outside `$TEST_PROJECT`;
+- the directory contains a generated `README.md` after render or rebuild.
+
+Rebuild the full Markdown view:
+
+```bash
+local-history rebuild-markdown-view "$TEST_PROJECT"
+```
+
+Open the generated root `README.md` in Zed or a pager:
+
+```bash
+local-history view-root "$TEST_PROJECT"
+```
+
+Then open:
+
+```text
+<view-root>/README.md
+```
+
+Expected:
+
+- the root Markdown page links to day/hour history pages;
+- an hour page links to fixed 10-minute segment pages;
+- a segment page links to exact snapshot pages for `note.txt`;
+- generated links use absolute local paths under `view_root`, so clicking from Zed opens the target file instead of resolving relative to `$TEST_PROJECT`;
+- an exact snapshot page includes file path, timestamp, full snapshot ID, restore command, and text preview when the snapshot is text.
+
+Copy the restore command from one exact snapshot page and run it from a shell. It should look like:
+
+```bash
+local-history restore <snapshot-id>
+```
+
+Expected:
+
+- `note.txt` changes to the snapshot content shown or implied by the page;
+- restore output includes a `safety_snapshot_id`;
+- `local-history undo-restore "$TEST_PROJECT"` returns `note.txt` to the pre-restore state.
+
+Important interpretation:
+
+- Markdown files are a generated browsing view, not the source of truth.
+- Deleting `view/` should not delete history; `local-history rebuild-markdown-view "$TEST_PROJECT"` should recreate it from stored snapshots.
+- After pruning, old Markdown links may point to snapshots that no longer exist. Confirm with `local-history show <snapshot-id-or-unique-prefix>`.
+
 ## Restore Test
 
 Copy a snapshot ID prefix from:

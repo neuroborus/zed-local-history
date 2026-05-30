@@ -906,17 +906,17 @@ mod tests {
         let hour_markdown_path = store
             .layout()
             .view_dir
-            .join(&hour_entry.relative_markdown_path);
+            .join(hour_entry.relative_markdown_path);
         let root_index = fs::read_to_string(store.layout().view_dir.join("README.md"))
             .expect("root markdown index must exist");
-        let relative_hour_path = hour_entry
-            .relative_markdown_path
-            .to_string_lossy()
-            .replace('\\', "/");
+        let hour_link_target = format!(
+            "<{}>",
+            hour_markdown_path.display().to_string().replace('\\', "/")
+        );
 
         assert!(hour_markdown_path.exists());
         assert!(!rebuilt.is_empty());
-        assert!(root_index.contains(&format!("./{relative_hour_path}")));
+        assert!(root_index.contains(&hour_link_target));
 
         cleanup_test_project(&root);
     }

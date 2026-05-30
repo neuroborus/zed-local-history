@@ -1020,7 +1020,7 @@ impl LocalHistoryStore {
              - Generated At: `{}`\n\n\
              ## Restore\n\n\
              ```bash\n\
-             cargo run -p local-history-cli -- restore {}\n\
+             local-history restore {}\n\
              ```\n\n\
              ## Preview\n\n\
              ```text\n\
@@ -1094,14 +1094,14 @@ impl LocalHistoryStore {
                     let link = snapshot_links.get(&snapshot.id).ok_or_else(|| {
                         StorageError::SnapshotNotFound(snapshot.id.as_str().to_string())
                     })?;
-                    let link_name =
-                        path_to_slash_string(relative_path_from_hour_dir(&relative_path, link)?);
+                    let link_path = self.layout.view_dir.join(link);
+                    let link_target = markdown_link_target(&link_path);
 
                     body.push_str(&format!(
-                        "- [{} — {}](./{})\n",
+                        "- [{} - {}]({})\n",
                         human_timestamp(&snapshot.timestamp),
                         short_id(snapshot.id.as_str()),
-                        link_name
+                        link_target
                     ));
                 }
 
@@ -1124,9 +1124,7 @@ impl LocalHistoryStore {
 
             for snapshot_id in snapshot_ids {
                 body.push_str("```bash\n");
-                body.push_str(&format!(
-                    "cargo run -p local-history-cli -- restore {snapshot_id}\n"
-                ));
+                body.push_str(&format!("local-history restore {snapshot_id}\n"));
                 body.push_str("```\n\n");
             }
         }
@@ -1174,11 +1172,13 @@ impl LocalHistoryStore {
                 .map(|file_history| file_history.snapshot_count)
                 .sum();
             let file_count = segment.affected_files.len();
+            let link_path = hour_dir.join(format!("{}.md", segment.segment.label));
+            let link_target = markdown_link_target(&link_path);
 
             body.push_str(&format!(
-                "- [{}]({}.md) — {} snapshots across {} files\n",
+                "- [{}]({}) - {} snapshots across {} files\n",
                 human_window_label(&segment.segment.from, &segment.segment.to),
-                segment.segment.label,
+                link_target,
                 snapshot_count,
                 file_count
             ));
@@ -1186,7 +1186,7 @@ impl LocalHistoryStore {
 
         body.push_str("\n## Rebuild\n\n```bash\n");
         body.push_str(&format!(
-            "cargo run -p local-history-cli -- rebuild-markdown-view {}\n",
+            "local-history rebuild-markdown-view {}\n",
             self.project.root.display()
         ));
         body.push_str("```\n");
@@ -1228,11 +1228,15 @@ impl LocalHistoryStore {
         } else {
             for (hour, count) in hour_counts {
                 let hour_start = parse_iso_hour(&hour)?;
-                let link = path_to_slash_string(hour_markdown_relative_path(hour_start));
+                let link_path = self
+                    .layout
+                    .view_dir
+                    .join(hour_markdown_relative_path(hour_start));
+                let link_target = markdown_link_target(&link_path);
                 body.push_str(&format!(
-                    "- [{}](./{}) — {} snapshots\n",
+                    "- [{}]({}) - {} snapshots\n",
                     human_hour_label(hour_start),
-                    link,
+                    link_target,
                     count
                 ));
             }
@@ -1240,11 +1244,11 @@ impl LocalHistoryStore {
 
         body.push_str("\n## Commands\n\n```bash\n");
         body.push_str(&format!(
-            "cargo run -p local-history-cli -- view-root {}\n",
+            "local-history view-root {}\n",
             self.project.root.display()
         ));
         body.push_str(&format!(
-            "cargo run -p local-history-cli -- rebuild-markdown-view {}\n",
+            "local-history rebuild-markdown-view {}\n",
             self.project.root.display()
         ));
         body.push_str("```\n");
@@ -2066,44 +2070,16 @@ fn remove_directory_if_empty(path: &Path) -> Result<(), StorageError> {
     Ok(())
 }
 
-fn relative_path_from_hour_dir(from_path: &Path, to_path: &Path) -> Result<PathBuf, StorageError> {
-    let base = from_path
-        .parent()
-        .ok_or_else(|| StorageError::InvalidRelativePath(from_path.display().to_string()))?;
-
-    let to_components = normalize_relative_path(to_path)?
-        .components()
-        .map(component_to_string)
-        .collect::<Vec<_>>();
-    let base_components = normalize_relative_path(base)?
-        .components()
-        .map(component_to_string)
-        .collect::<Vec<_>>();
-
-    let shared_len = base_components
-        .iter()
-        .zip(to_components.iter())
-        .take_while(|(left, right)| left == right)
-        .count();
-    let mut relative = PathBuf::new();
-
-    for _ in shared_len..base_components.len() {
-        relative.push("..");
-    }
-
-    for component in to_components.into_iter().skip(shared_len) {
-        relative.push(component);
-    }
-
-    Ok(relative)
-}
-
 fn path_to_slash_string(path: impl AsRef<Path>) -> String {
     path.as_ref()
         .components()
         .map(component_to_string)
         .collect::<Vec<_>>()
         .join("/")
+}
+
+fn markdown_link_target(path: &Path) -> String {
+    format!("<{}>", path.display().to_string().replace('\\', "/"))
 }
 
 fn component_to_string(component: Component<'_>) -> String {
@@ -2186,7 +2162,10 @@ fn restore_operation_row_mapper(
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalHistoryStore, SnapshotQuery, SnapshotWriteRequest, StorageError, SCHEMA_SQL};
+    use super::{
+        markdown_link_target, LocalHistoryStore, SnapshotQuery, SnapshotWriteRequest, StorageError,
+        SCHEMA_SQL,
+    };
     use crate::{RetentionPolicy, SnapshotId, SnapshotKind};
     use rusqlite::params;
     use std::fs;
@@ -2885,12 +2864,28 @@ mod tests {
             PathBuf::from("2026-05-02/14/README.md")
         );
         assert!(hour_readme.contains("## Segments"));
-        assert!(root_index.contains("./2026-05-02/14/README.md"));
-        assert!(segment_markdown.contains(&format!(
-            "cargo run -p local-history-cli -- restore {}",
-            snapshot.id.as_str()
+        assert!(hour_readme.contains(&markdown_link_target(
+            &store
+                .layout()
+                .view_dir
+                .join("2026-05-02")
+                .join("14")
+                .join("14-10__14-20.md")
         )));
+        assert!(root_index.contains(&markdown_link_target(
+            &store
+                .layout()
+                .view_dir
+                .join("2026-05-02")
+                .join("14")
+                .join("README.md")
+        )));
+        assert!(
+            segment_markdown.contains(&format!("local-history restore {}", snapshot.id.as_str()))
+        );
+        assert!(segment_markdown.contains(&markdown_link_target(&snapshot_pages[0].path())));
         assert!(snapshot_page.contains(snapshot.id.as_str()));
+        assert!(snapshot_page.contains(&format!("local-history restore {}", snapshot.id.as_str())));
         assert!(snapshot_page.contains("println!(\"alpha\");"));
         assert!(generated_entries >= 8);
 
@@ -2938,8 +2933,22 @@ mod tests {
 
         assert!(!first_entries.is_empty());
         assert!(!second_entries.is_empty());
-        assert!(root_index.contains("./2026-05-02/15/README.md"));
-        assert!(root_index.contains("./2026-05-02/14/README.md"));
+        assert!(root_index.contains(&markdown_link_target(
+            &store
+                .layout()
+                .view_dir
+                .join("2026-05-02")
+                .join("15")
+                .join("README.md")
+        )));
+        assert!(root_index.contains(&markdown_link_target(
+            &store
+                .layout()
+                .view_dir
+                .join("2026-05-02")
+                .join("14")
+                .join("README.md")
+        )));
 
         cleanup_test_roots(&base_dir);
     }
