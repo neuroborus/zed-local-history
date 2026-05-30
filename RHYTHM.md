@@ -4,6 +4,8 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-30
 
+- Added MCP agent operating context in Stage 11.3.3. Root `llms.txt` is now the maintained agent guide, packaged into `local-history-mcp` as `local-history://guide`, exposed through the read-only `local_history_guide` tool, and summarized in expanded MCP initialize instructions.
+- Fixed Markdown view navigation for real editor workflows. Generated view links now use absolute local paths under external storage, restore examples use installed `local-history` commands instead of `cargo run`, crate READMEs document crate boundaries, and manual testing now covers Markdown navigation and restore-from-page flows.
 - Cleaned up the documentation split after manual testing. The root README now keeps user-facing CLI and product docs only, while local Zed dev setup, `target/debug`, `PATH`, and manual acceptance steps live under `agents/ZED_MANUAL_TESTING.md`.
 - Closed the Stage 11.3.1 MCP bootstrap parity gap. The Zed extension now resolves `local-history-mcp` from `PATH` for local iteration, otherwise downloads and caches the matching fixed-name MCP release archive, checks MCP version compatibility before Agent Panel launch, and the release workflow now publishes MCP-only bootstrap archives alongside sidecar-only archives.
 - Closed the Stage 6.5 snapshot-ID UX gap. Stored snapshot IDs remain opaque, human tables now use 12-character prefixes, and CLI/sidecar/MCP restore paths resolve full IDs or unique prefixes with explicit ambiguity errors. JSON, Markdown, logs, and structured MCP output remain the places for full durable IDs.

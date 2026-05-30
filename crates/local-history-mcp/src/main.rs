@@ -16,6 +16,22 @@ use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const SERVER_NAME: &str = "local-history-mcp";
 const WATCHER_STALE_AFTER_SECONDS: u64 = 5;
+const AGENT_GUIDE_URI: &str = "local-history://guide";
+const AGENT_GUIDE_TEXT: &str = include_str!("../../../llms.txt");
+const SERVER_INSTRUCTIONS: &str = "\
+Use these tools for filesystem-first local history recovery.
+
+Core rules:
+- Most tools require an explicit absolute project_root.
+- Local history stores data outside the repository; generated Markdown is only a rebuildable browsing layer.
+- Raw snapshots store the previous known file state from before a save/delete, not the newly saved content.
+- Snapshot IDs are opaque. Short prefixes are accepted only when unique.
+- Restore is state-changing and always creates a safety snapshot first.
+- Prefer local_history_view_snapshot before restoring unless the user already chose an exact snapshot.
+- Report the safety_snapshot_id after restore so the user knows the recovery point.
+- Prune is state-changing and can remove old snapshots according to retention policy.
+
+If you need the full operating model, call the read-only local_history_guide tool or read the MCP resource local-history://guide.";
 
 fn main() {
     match std::env::args().nth(1).as_deref() {
@@ -112,6 +128,8 @@ fn handle_message(message: Value) -> Option<Value> {
         "ping" => Some(jsonrpc_success(id, json!({}))),
         "tools/list" => Some(handle_tools_list(id)),
         "tools/call" => Some(handle_tools_call(id, &params)),
+        "resources/list" => Some(handle_resources_list(id)),
+        "resources/read" => Some(handle_resources_read(id, &params)),
         _ if object.contains_key("id") => Some(jsonrpc_error(
             id,
             -32601,
@@ -129,13 +147,60 @@ fn handle_initialize(id: Value) -> Value {
             "capabilities": {
                 "tools": {
                     "listChanged": false,
+                },
+                "resources": {
+                    "subscribe": false,
+                    "listChanged": false,
                 }
             },
             "serverInfo": {
                 "name": SERVER_NAME,
                 "version": env!("CARGO_PKG_VERSION"),
             },
-            "instructions": "Local filesystem-first history tools for snapshot browsing and safety-first restore. Most tools require an explicit project_root; restore tools require a snapshot_id.",
+            "instructions": SERVER_INSTRUCTIONS,
+        }),
+    )
+}
+
+fn handle_resources_list(id: Value) -> Value {
+    jsonrpc_success(
+        id,
+        json!({
+            "resources": [
+                {
+                    "uri": AGENT_GUIDE_URI,
+                    "name": "Local History Agent Guide",
+                    "description": "Complete operating guide for using zed-local-history safely through MCP, CLI, Markdown, and Zed.",
+                    "mimeType": "text/markdown",
+                }
+            ]
+        }),
+    )
+}
+
+fn handle_resources_read(id: Value, params: &Value) -> Value {
+    let Some(uri) = params.get("uri").and_then(Value::as_str) else {
+        return jsonrpc_error(
+            id,
+            -32602,
+            "resources/read requires a `uri` string".to_string(),
+        );
+    };
+
+    if uri != AGENT_GUIDE_URI {
+        return jsonrpc_error(id, -32602, format!("unknown resource uri: {uri}"));
+    }
+
+    jsonrpc_success(
+        id,
+        json!({
+            "contents": [
+                {
+                    "uri": AGENT_GUIDE_URI,
+                    "mimeType": "text/markdown",
+                    "text": AGENT_GUIDE_TEXT,
+                }
+            ]
         }),
     )
 }
@@ -145,6 +210,7 @@ fn handle_tools_list(id: Value) -> Value {
         id,
         json!({
             "tools": [
+                tool_local_history_guide(),
                 tool_local_history_status(),
                 tool_local_history_create_snapshot(),
                 tool_local_history_recent_snapshots(),
@@ -170,6 +236,7 @@ fn handle_tools_call(id: Value, params: &Value) -> Value {
         .unwrap_or_else(|| json!({}));
 
     let result = match name {
+        "local_history_guide" => tool_call_result(Ok(tool_guide())),
         "local_history_status" => tool_call_result(tool_status(&arguments)),
         "local_history_create_snapshot" => tool_call_result(tool_create_snapshot(&arguments)),
         "local_history_recent_snapshots" => tool_call_result(tool_recent_snapshots(&arguments)),
@@ -180,6 +247,15 @@ fn handle_tools_call(id: Value, params: &Value) -> Value {
     };
 
     jsonrpc_success(id, result)
+}
+
+fn tool_guide() -> Value {
+    json!({
+        "summary": "Returned the local-history agent operating guide.",
+        "uri": AGENT_GUIDE_URI,
+        "mime_type": "text/markdown",
+        "text": AGENT_GUIDE_TEXT,
+    })
 }
 
 fn tool_call_result(result: Result<Value, String>) -> Value {
@@ -832,6 +908,35 @@ fn jsonrpc_error(id: Value, code: i64, message: String) -> Value {
     })
 }
 
+fn tool_local_history_guide() -> Value {
+    json!({
+        "name": "local_history_guide",
+        "title": "Local History Guide",
+        "description": "Return the complete read-only operating guide for using local-history safely through MCP, CLI, Markdown, and Zed.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        },
+        "outputSchema": {
+            "type": "object",
+            "properties": {
+                "uri": { "type": "string" },
+                "mime_type": { "type": "string" },
+                "text": { "type": "string" }
+            },
+            "required": ["uri", "mime_type", "text"]
+        },
+        "annotations": {
+            "title": "Local History Guide",
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+        }
+    })
+}
+
 fn tool_local_history_status() -> Value {
     json!({
         "name": "local_history_status",
@@ -1073,7 +1178,7 @@ Usage:
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_message, MCP_PROTOCOL_VERSION};
+    use super::{handle_message, AGENT_GUIDE_URI, MCP_PROTOCOL_VERSION};
     use local_history_core::{LocalHistoryStore, SnapshotKind, SnapshotWriteRequest};
     use serde_json::json;
     use std::fs;
@@ -1103,9 +1208,49 @@ mod tests {
             false
         );
         assert_eq!(
+            response["result"]["capabilities"]["resources"]["listChanged"],
+            false
+        );
+        assert!(response["result"]["instructions"]
+            .as_str()
+            .expect("instructions must be a string")
+            .contains("safety snapshot"));
+        assert_eq!(
             response["result"]["serverInfo"]["name"],
             "local-history-mcp"
         );
+    }
+
+    #[test]
+    fn resources_expose_agent_guide() {
+        let list_response = handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "resources/list",
+            "params": {}
+        }))
+        .expect("resources/list must return a response");
+        let resources = list_response["result"]["resources"]
+            .as_array()
+            .expect("resources must be an array");
+
+        assert_eq!(resources[0]["uri"], AGENT_GUIDE_URI);
+
+        let read_response = handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "resources/read",
+            "params": {
+                "uri": AGENT_GUIDE_URI
+            }
+        }))
+        .expect("resources/read must return a response");
+        let text = read_response["result"]["contents"][0]["text"]
+            .as_str()
+            .expect("resource text must be a string");
+
+        assert!(text.contains("zed-local-history LLM Guide"));
+        assert!(text.contains("Restore is safety-first"));
     }
 
     #[test]
@@ -1132,6 +1277,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "local_history_guide",
                 "local_history_status",
                 "local_history_create_snapshot",
                 "local_history_recent_snapshots",
@@ -1140,6 +1286,28 @@ mod tests {
                 "local_history_prune",
             ]
         );
+    }
+
+    #[test]
+    fn guide_tool_returns_agent_guide() {
+        let response = handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "local_history_guide",
+                "arguments": {}
+            }
+        }))
+        .expect("guide tool must respond");
+        let result = &response["result"]["structuredContent"];
+
+        assert_eq!(result["uri"], AGENT_GUIDE_URI);
+        assert_eq!(result["mime_type"], "text/markdown");
+        assert!(result["text"]
+            .as_str()
+            .expect("guide text must be a string")
+            .contains("Restore is safety-first"));
     }
 
     #[test]

@@ -449,14 +449,21 @@ local-history-mcp --help
 ### Current MCP tools
 
 - `local_history_status`
+- `local_history_guide`
 - `local_history_create_snapshot`
 - `local_history_recent_snapshots`
 - `local_history_view_snapshot`
 - `local_history_restore_snapshot`
 - `local_history_prune`
 
+### Current MCP resources
+
+- `local-history://guide`
+  Complete agent operating guide, packaged from [llms.txt](llms.txt), covering storage, snapshot semantics, restore safety, Markdown browsing, CLI usage, MCP usage, and Zed integration boundaries.
+
 Current tool contract:
 
+- `local_history_guide` returns the same guide text as the `local-history://guide` resource for MCP clients that expose tools more reliably than resources;
 - most tools require explicit `project_root`;
 - snapshot view and restore work by full `snapshot_id` or any unique snapshot ID prefix;
 - all tools accept optional `data_dir` when you want to use a non-default local-history storage base directory;
@@ -507,7 +514,6 @@ Examples of requests that map well to the current tool surface:
 ### Current MCP limitations
 
 - no prompts surface is exposed yet;
-- no resources surface is exposed yet;
 - no diff tool exists yet;
 - extension-managed MCP release bootstrap still needs live validation against a real tagged GitHub Release.
 
@@ -666,7 +672,7 @@ Current limitation:
 - project-local custom ignore files are not wired yet;
 - the Zed extension reveals Markdown paths instead of directly opening arbitrary external files;
 - release workflow and extension bootstrap still need live external validation on a real tagged release;
-- the MCP server still needs live validation inside a real Zed Agent `context_servers` setup and does not yet expose prompts, resources, or diff tools.
+- the MCP server still needs live validation inside a real Zed Agent `context_servers` setup and does not yet expose prompts or diff tools.
 
 ## Repository layout
 
@@ -674,8 +680,10 @@ Current limitation:
 zed-local-history/
   README.md
   RHYTHM.md
+  llms.txt
   Cargo.toml
   rust-toolchain.toml
+  agents/
   crates/
     local-history-core/
     local-history-cli/

@@ -1070,6 +1070,37 @@ Acceptance:
 - a user can start watching, check status, list snapshots, render current history, restore, and undo through `local-history` without directly calling `local-history-sidecar`;
 - existing sidecar commands remain available for extension integration and debugging.
 
+### 11.3.3 Add MCP agent operating context
+
+The Agent Panel can call tools, but tool names alone do not teach the model the product's recovery semantics. Provide a compact, maintained agent guide that explains storage, previous-state snapshots, restore safety, Markdown browsing, and MCP usage.
+
+Implementation:
+
+- keep root `llms.txt` as the concise agent operating guide;
+- expose the same guide through a read-only `local_history_guide` MCP tool;
+- expose the same guide through MCP as `local-history://guide`;
+- include safety-first restore and previous-state snapshot rules in MCP initialize instructions;
+- document that Zed Agent Panel uses MCP tools, not extension slash commands;
+- keep the guide aligned with README, crate READMEs, and manual testing docs.
+
+Acceptance:
+
+- MCP `initialize` returns actionable server instructions;
+- MCP `tools/list` exposes `local_history_guide`;
+- MCP `tools/call` returns the guide through `local_history_guide`;
+- MCP `resources/list` exposes `local-history://guide`;
+- MCP `resources/read` returns the guide text;
+- docs point agents and contributors to `llms.txt`;
+- tests cover the resource and initialization contract.
+
+Local implementation status:
+
+- implemented in `local-history-mcp`;
+- root `llms.txt` added and packaged into the MCP binary;
+- read-only `local_history_guide` tool added for clients that surface tools more reliably than resources;
+- README and agent docs reference the guide;
+- live Agent Panel validation remains tracked under the external validation plan.
+
 ### 11.4 Define update behavior
 
 Decide whether the extension:
@@ -1316,6 +1347,14 @@ Because the sidecar is editor-independent, support can be added for:
 - [x] MCP binary compatibility is checked before Agent Panel launch.
 - [x] Clear errors are shown when capabilities are missing.
 
+## MCP Agent Context
+
+- [x] MCP initialize returns operating instructions.
+- [x] MCP exposes `local_history_guide`.
+- [x] MCP exposes `local-history://guide`.
+- [x] Agent guide explains storage, snapshot semantics, Markdown browsing, restore safety, and MCP usage.
+- [x] Agent guide is packaged into the MCP binary.
+
 ## Release
 
 - [x] CI passes.
@@ -1522,20 +1561,24 @@ Validate the additive MCP surface in a real agent client, not only through local
 3. Validate the manual fallback path by registering `local-history-mcp` in a real Zed `context_servers` config with an explicit binary path.
 4. Confirm MCP initialization succeeds and the server appears active in each path.
 5. Verify `tools/list` exposes the expected local-history tools.
-6. Call:
+6. Verify `tools/call` for `local_history_guide` returns the guide text.
+7. Verify `resources/list` exposes `local-history://guide`.
+8. Verify `resources/read` returns the guide text and the agent can use it to explain restore safety and Markdown browsing.
+9. Call:
    - `local_history_status`
    - `local_history_create_snapshot`
    - `local_history_recent_snapshots`
    - `local_history_view_snapshot`
    - `local_history_restore_snapshot`
    - `local_history_prune`
-7. Confirm restore still creates a safety snapshot before modifying the live file.
-8. Verify destructive-tool approval behavior in the real Agent Panel settings.
+10. Confirm restore still creates a safety snapshot before modifying the live file.
+11. Verify destructive-tool approval behavior in the real Agent Panel settings.
 
 ### Acceptance
 
 - Zed can start the MCP server successfully.
 - Production Agent Panel use does not require manual `PATH` setup for `local-history-mcp`.
 - The documented tools are available and callable.
+- The agent guide tool/resource is available and useful in a real Agent Panel session.
 - Structured MCP output is usable by the agent.
 - Safety-first restore behavior is preserved through MCP.

@@ -9,7 +9,7 @@ Local dev details such as `cargo build`, `target/debug`, and shell `PATH` setup 
 Set these once for the examples below:
 
 ```bash
-export REPO=/home/neuroborus/Desktop/PROJECTS/PETS/zed-local-history
+export REPO=/path/to/zed-local-history
 export TEST_PROJECT=/tmp/lh-zed-manual
 export PATH="$HOME/.cargo/bin:$REPO/target/debug:$PATH"
 ```
@@ -482,6 +482,19 @@ Expected:
 
 - the MCP server responds through a tool call;
 - status matches the same project root as `local-history-sidecar status`.
+
+Then verify the agent-facing guide is visible through MCP:
+
+```text
+Use the local_history_guide tool to read the local-history MCP guide and explain how restore safety works.
+```
+
+Expected:
+
+- the Agent can use the `local_history_guide` MCP tool;
+- if the client exposes resources, the same guide is also available as `local-history://guide`;
+- the answer explains that restore creates a safety snapshot before modifying the live file;
+- the answer does not claim that generated Markdown is the source of truth.
 
 ## Troubleshooting The 2026-05-30 First Manual Run
 

@@ -7,8 +7,9 @@ MCP stdio adapter for agent-facing local-history tools.
 `local-history-mcp` exposes local-history behavior to MCP clients such as the Zed Agent Panel:
 
 - JSON-RPC stdio server lifecycle;
-- MCP initialize, ping, tools/list, and tools/call handling;
+- MCP initialize, ping, tools/list, tools/call, resources/list, and resources/read handling;
 - tool schemas and descriptions;
+- server instructions, the `local_history_guide` tool, and the packaged `local-history://guide` agent resource;
 - structured tool output for status, snapshot creation, recent snapshots, snapshot view, restore, and prune;
 - safety-first restore access through MCP.
 
@@ -16,6 +17,8 @@ MCP stdio adapter for agent-facing local-history tools.
 
 - MCP protocol boundary.
 - Tool names, input schemas, summaries, and structured output shape.
+- Agent instructions and MCP resource exposure.
+- Read-only agent guide tool exposure.
 - Agent-facing error messages.
 - Snapshot ID prefix resolution for MCP tool input.
 
@@ -25,7 +28,7 @@ MCP stdio adapter for agent-facing local-history tools.
 - Watcher process management.
 - CLI command parsing or terminal UX.
 - Zed extension release bootstrap.
-- Long-form product documentation for agents.
+- Canonical product documentation beyond packaging the root `llms.txt` guide for MCP clients.
 
 ## Used By
 
@@ -35,4 +38,4 @@ MCP stdio adapter for agent-facing local-history tools.
 
 ## Validation
 
-MCP tests should cover initialization, tools/list, tools/call behavior, schema stability, structured output, and restore safety through the MCP boundary. Core storage invariants remain in `local-history-core`.
+MCP tests should cover initialization, tools/list, tools/call, resources/list, resources/read, schema stability, structured output, and restore safety through the MCP boundary. Core storage invariants remain in `local-history-core`.
