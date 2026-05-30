@@ -95,7 +95,7 @@ cargo run -p xtask -- full-ci
 
 ## 9. Documentation review
 
-- [ ] `README.md` still reflects the current repository shape and validation flow (including [Examples](../README.md#examples) and `docs/` demo GIFs when user-facing demos change)
+- [ ] `README.md` still reflects the current repository shape and validation flow
 - [ ] `RHYTHM.md` records meaningful architectural, workflow, or behavior changes in newest-first order
 - [ ] `llms.txt` and MCP `SERVER_INSTRUCTIONS` stay aligned when agent routing or MCP tool behavior changes
 - [ ] `editors/zed/README.md` still reflects the current extension strategy when that package changes
