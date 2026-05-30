@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use local_history_core::{
-    default_data_dir, normalize_project_root, LocalHistoryStore, RestoreOutcome, RetentionPolicy,
-    SnapshotId, SnapshotKind, SnapshotPage, SnapshotQuery, SnapshotRecord, SnapshotWriteRequest,
-    StorageLayout,
+    default_data_dir, normalize_project_root, snapshot_to_current_unified_diff, LocalHistoryStore,
+    RestoreOutcome, RetentionPolicy, SnapshotId, SnapshotKind, SnapshotPage, SnapshotQuery,
+    SnapshotRecord, SnapshotWriteRequest, StorageLayout,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -28,6 +28,7 @@ Core rules:
 - Snapshot IDs are opaque. Short prefixes are accepted only when unique.
 - Restore is state-changing and always creates a safety snapshot first.
 - Prefer local_history_view_snapshot before restoring unless the user already chose an exact snapshot.
+- Use local_history_diff_snapshot for unified text diff from snapshot to the current live file before restore when code-level inspection is needed.
 - Report the safety_snapshot_id after restore so the user knows the recovery point.
 - Prune is state-changing and can remove old snapshots according to retention policy.
 
@@ -215,6 +216,7 @@ fn handle_tools_list(id: Value) -> Value {
                 tool_local_history_create_snapshot(),
                 tool_local_history_recent_snapshots(),
                 tool_local_history_view_snapshot(),
+                tool_local_history_diff_snapshot(),
                 tool_local_history_restore_snapshot(),
                 tool_local_history_prune(),
             ]
@@ -241,6 +243,7 @@ fn handle_tools_call(id: Value, params: &Value) -> Value {
         "local_history_create_snapshot" => tool_call_result(tool_create_snapshot(&arguments)),
         "local_history_recent_snapshots" => tool_call_result(tool_recent_snapshots(&arguments)),
         "local_history_view_snapshot" => tool_call_result(tool_view_snapshot(&arguments)),
+        "local_history_diff_snapshot" => tool_call_result(tool_diff_snapshot(&arguments)),
         "local_history_restore_snapshot" => tool_call_result(tool_restore_snapshot(&arguments)),
         "local_history_prune" => tool_call_result(tool_prune(&arguments)),
         _ => return jsonrpc_error(id, -32601, format!("tool not found: {name}")),
@@ -399,15 +402,7 @@ fn tool_recent_snapshots(arguments: &Value) -> Result<Value, String> {
 }
 
 fn tool_view_snapshot(arguments: &Value) -> Result<Value, String> {
-    let data_dir = data_dir_from_arguments(arguments)?;
-    let snapshot_id = required_snapshot_id(arguments, "snapshot_id", &data_dir)?;
-    let store = LocalHistoryStore::open_for_snapshot_id(data_dir, &snapshot_id)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
-    let snapshot = store
-        .snapshot(&snapshot_id)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
+    let (store, snapshot_id, snapshot) = open_snapshot_from_arguments(arguments)?;
     let contents = store
         .read_snapshot_content(&snapshot_id)
         .map_err(|error| error.to_string())?;
@@ -428,12 +423,34 @@ fn tool_view_snapshot(arguments: &Value) -> Result<Value, String> {
     }))
 }
 
+fn tool_diff_snapshot(arguments: &Value) -> Result<Value, String> {
+    let (store, snapshot_id, snapshot) = open_snapshot_from_arguments(arguments)?;
+    let snapshot_contents = store
+        .read_snapshot_content(&snapshot_id)
+        .map_err(|error| error.to_string())?;
+    let live_path = store.project().root.join(&snapshot.relative_path);
+    let diff = snapshot_to_current_unified_diff(&snapshot, &snapshot_contents, &live_path)
+        .map_err(|error| error.to_string())?;
+    let unchanged = diff == "no changes\n";
+
+    Ok(json!({
+        "summary": format!(
+            "Diff from snapshot {} for {} to current {}.",
+            short_id(snapshot.id.as_str()),
+            snapshot.relative_path.display(),
+            live_path.display()
+        ),
+        "project_id": store.project().id.as_str(),
+        "project_root": store.project().root.display().to_string(),
+        "snapshot": snapshot_json(&snapshot),
+        "live_path": live_path.display().to_string(),
+        "unchanged": unchanged,
+        "diff": diff,
+    }))
+}
+
 fn tool_restore_snapshot(arguments: &Value) -> Result<Value, String> {
-    let data_dir = data_dir_from_arguments(arguments)?;
-    let snapshot_id = required_snapshot_id(arguments, "snapshot_id", &data_dir)?;
-    let store = LocalHistoryStore::open_for_snapshot_id(data_dir, &snapshot_id)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
+    let (store, snapshot_id, _) = open_snapshot_from_arguments(arguments)?;
     let outcome = store
         .restore_snapshot(&snapshot_id, &current_timestamp()?)
         .map_err(|error| error.to_string())?;
@@ -806,6 +823,22 @@ fn resolve_snapshot_id(data_dir: &Path, input: &str) -> Result<SnapshotId, Strin
     }
 }
 
+fn open_snapshot_from_arguments(
+    arguments: &Value,
+) -> Result<(LocalHistoryStore, SnapshotId, SnapshotRecord), String> {
+    let data_dir = data_dir_from_arguments(arguments)?;
+    let snapshot_id = required_snapshot_id(arguments, "snapshot_id", &data_dir)?;
+    let store = LocalHistoryStore::open_for_snapshot_id(&data_dir, &snapshot_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
+    let snapshot = store
+        .snapshot(&snapshot_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
+
+    Ok((store, snapshot_id, snapshot))
+}
+
 fn ambiguous_snapshot_prefix_error(prefix: &str, matches: &[SnapshotId]) -> String {
     let mut message = format!(
         "snapshot prefix `{prefix}` is ambiguous; use a longer prefix or full snapshot ID:"
@@ -1092,6 +1125,35 @@ fn tool_local_history_view_snapshot() -> Value {
     })
 }
 
+fn tool_local_history_diff_snapshot() -> Value {
+    json!({
+        "name": "local_history_diff_snapshot",
+        "title": "Diff Local Snapshot",
+        "description": "Return a unified text diff from one snapshot to the current live file by full snapshot ID or unique snapshot ID prefix.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "snapshot_id": {
+                    "type": "string",
+                    "description": "Full local-history snapshot ID or unique snapshot ID prefix."
+                },
+                "data_dir": {
+                    "type": "string",
+                    "description": "Optional local-history base data directory."
+                }
+            },
+            "required": ["snapshot_id"]
+        },
+        "annotations": {
+            "title": "Diff Local Snapshot",
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+        }
+    })
+}
+
 fn tool_local_history_restore_snapshot() -> Value {
     json!({
         "name": "local_history_restore_snapshot",
@@ -1282,6 +1344,7 @@ mod tests {
                 "local_history_create_snapshot",
                 "local_history_recent_snapshots",
                 "local_history_view_snapshot",
+                "local_history_diff_snapshot",
                 "local_history_restore_snapshot",
                 "local_history_prune",
             ]
@@ -1432,6 +1495,56 @@ mod tests {
             fs::read_to_string(&live_path).expect("live file must reflect restored snapshot"),
             "target state\n"
         );
+
+        cleanup_test_root(&root);
+    }
+
+    #[test]
+    fn diff_snapshot_tool_works() {
+        let root = create_test_root("mcp-diff");
+        let base_dir = root.join("data");
+        let project_root = root.join("project");
+        let live_path = project_root.join("note.txt");
+
+        fs::create_dir_all(&base_dir).expect("base dir must exist");
+        fs::create_dir_all(&project_root).expect("project root must exist");
+
+        let store = LocalHistoryStore::open(&base_dir, &project_root).expect("store must open");
+        let snapshot = store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("note.txt"),
+                contents: b"v1\n".to_vec(),
+                timestamp: "2026-05-03T10:00:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("snapshot must store");
+        fs::write(live_path, b"v2\n").expect("live file must exist");
+        let snapshot_prefix = &snapshot.id.as_str()[..12];
+
+        let diff_response = handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {
+                "name": "local_history_diff_snapshot",
+                "arguments": {
+                    "snapshot_id": snapshot_prefix,
+                    "data_dir": base_dir.display().to_string()
+                }
+            }
+        }))
+        .expect("diff snapshot tool must respond");
+        let diff_result = &diff_response["result"]["structuredContent"];
+        let diff_text = diff_result["diff"]
+            .as_str()
+            .expect("diff text must be a string");
+
+        assert_eq!(diff_result["snapshot"]["id"], snapshot.id.as_str());
+        assert_eq!(diff_result["unchanged"], false);
+        assert!(diff_text.contains("-v1"));
+        assert!(diff_text.contains("+v2"));
 
         cleanup_test_root(&root);
     }

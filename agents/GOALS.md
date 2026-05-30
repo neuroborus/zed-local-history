@@ -237,7 +237,7 @@ Responsibilities:
 - expose local-history tools and prompts through the MCP protocol;
 - translate MCP tool requests into `local-history-core` operations or sidecar-facing commands;
 - keep destructive actions such as restore safety-first;
-- return stable, agent-friendly structured output for recent snapshots, snapshot view, status, and restore flows.
+- return stable, agent-friendly structured output for recent snapshots, snapshot view, snapshot diff, status, and restore flows.
 
 Initial implemented tool surface:
 
@@ -245,12 +245,9 @@ Initial implemented tool surface:
 - `local_history_create_snapshot`
 - `local_history_recent_snapshots`
 - `local_history_view_snapshot`
+- `local_history_diff_snapshot`
 - `local_history_restore_snapshot`
 - `local_history_prune`
-
-Future MCP expansion once dedicated product surfaces exist:
-
-- `local_history_diff_snapshot`
 
 If this crate is added, it must not become a second home for storage or restore business logic. It is an adapter layer.
 

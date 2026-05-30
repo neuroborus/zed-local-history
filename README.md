@@ -472,6 +472,7 @@ local-history-mcp --help
 - `local_history_create_snapshot`
 - `local_history_recent_snapshots`
 - `local_history_view_snapshot`
+- `local_history_diff_snapshot`
 - `local_history_restore_snapshot`
 - `local_history_prune`
 
@@ -487,7 +488,7 @@ Current tool contract:
 - snapshot view and restore work by full `snapshot_id` or any unique snapshot ID prefix;
 - all tools accept optional `data_dir` when you want to use a non-default local-history storage base directory;
 - `local_history_restore_snapshot` remains safety-first and creates a safety snapshot before writing the live file;
-- `local_history_diff_snapshot` does not exist yet; use CLI `local-history diff <snapshot-id-or-unique-prefix>` for textual diff against the current live file.
+- `local_history_diff_snapshot` returns unified text diff from snapshot to the current live file for the same snapshot ID or unique prefix accepted by view/restore, plus `unchanged` when the live file matches the snapshot.
 
 ### Zed Agent Panel usage
 

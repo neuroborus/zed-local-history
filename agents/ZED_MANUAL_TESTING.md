@@ -508,6 +508,21 @@ Expected:
 - the answer explains that restore creates a safety snapshot before modifying the live file;
 - the answer does not claim that generated Markdown is the source of truth.
 
+Then verify snapshot diff through MCP:
+
+```text
+Use local_history_diff_snapshot to show the unified diff between the latest raw snapshot for note.txt and the current live file in /tmp/lh-zed-manual.
+```
+
+Use your real `$TEST_PROJECT` path and a file that has both a stored snapshot and a different live state.
+
+Expected:
+
+- the Agent calls `local_history_diff_snapshot` (or uses the equivalent MCP tool flow);
+- structured output includes `diff` and `unchanged`;
+- the diff direction is snapshot → current live file;
+- restore is not performed during the diff call.
+
 ## Troubleshooting The 2026-05-30 First Manual Run
 
 Observed log:

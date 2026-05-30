@@ -10,10 +10,10 @@ MCP stdio adapter for agent-facing local-history tools.
 - MCP initialize, ping, tools/list, tools/call, resources/list, and resources/read handling;
 - tool schemas and descriptions;
 - server instructions, the `local_history_guide` tool, and the packaged `local-history://guide` agent resource;
-- structured tool output for status, snapshot creation, recent snapshots, snapshot view, restore, and prune;
+- structured tool output for status, snapshot creation, recent snapshots, snapshot view, snapshot diff (including `unchanged`), restore, and prune;
 - safety-first restore access through MCP.
 
-`local-history-mcp` does not expose a diff tool yet. Use CLI `local-history diff <snapshot-id-or-unique-prefix>` for unified text diff against the current live file.
+`local-history-mcp` exposes the same unified text diff as CLI `local-history diff <snapshot-id-or-unique-prefix>` through `local_history_diff_snapshot`.
 
 ## Owns
 

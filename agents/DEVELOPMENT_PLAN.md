@@ -44,12 +44,9 @@ First implemented MCP tool slice:
 - `local_history_create_snapshot`
 - `local_history_recent_snapshots`
 - `local_history_view_snapshot`
+- `local_history_diff_snapshot`
 - `local_history_restore_snapshot`
 - `local_history_prune`
-
-Future MCP additions once dedicated product surfaces exist:
-
-- `local_history_diff_snapshot`
 
 If exposed through Zed, it may be connected either:
 
@@ -1264,14 +1261,14 @@ Add:
 
 - generated diff Markdown;
 - temporary files for manual comparison;
-- MCP `local_history_diff_snapshot` tool;
 - native side-by-side diff if Zed exposes a suitable API.
 
 Local implementation status:
 
 - CLI `local-history diff <snapshot-id-or-unique-prefix>` is implemented for text snapshots against the current live file;
+- MCP `local_history_diff_snapshot` exposes the same unified text diff through the Agent Panel;
 - binary diffs are intentionally reported as unsupported textual diffs;
-- Markdown, MCP, and native Zed diff surfaces remain post-MVP improvements.
+- Markdown and native Zed diff surfaces remain post-MVP improvements.
 
 ### 13.3 Native Zed UI if supported
 

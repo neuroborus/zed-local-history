@@ -163,6 +163,7 @@ Current MCP tools:
 - `local_history_create_snapshot`
 - `local_history_recent_snapshots`
 - `local_history_view_snapshot`
+- `local_history_diff_snapshot`
 - `local_history_restore_snapshot`
 - `local_history_prune`
 
@@ -176,9 +177,10 @@ General MCP rules:
 - Most tools require explicit `project_root`.
 - Use absolute project roots when possible.
 - `data_dir` is optional and normally omitted.
-- Snapshot view and restore accept a full snapshot ID or unique prefix.
+- Snapshot view, diff, and restore accept a full snapshot ID or unique prefix.
 - `local_history_recent_snapshots` returns raw snapshots by default. Set `include_safety` only when safety snapshots are needed.
 - `local_history_restore_snapshot` always creates a safety snapshot before writing the live file.
+- `local_history_diff_snapshot` returns unified text diff from snapshot to current live file and sets `unchanged` when they match.
 - `local_history_prune` applies retention and rebuilds the Markdown view.
 
 Recommended agent sequence:
@@ -187,12 +189,12 @@ Recommended agent sequence:
 2. Call `local_history_status` for the project root.
 3. Call `local_history_recent_snapshots` with a small limit and filters when helpful.
 4. Call `local_history_view_snapshot` before restore unless the user already selected an exact snapshot.
-5. For code-level inspection before restore, use CLI `local-history diff <snapshot-id-or-prefix>` because MCP does not expose diff yet.
+5. Call `local_history_diff_snapshot` when you need a unified text diff from snapshot to the current live file.
 6. Call `local_history_restore_snapshot` only after the target is clear.
 7. Tell the user the `safety_snapshot_id` from restore output.
 8. If the restore was wrong, use the CLI `local-history undo-restore <project-root>` because MCP does not expose undo yet.
 
-MCP does not currently expose diff, undo, prompts, or watcher start tools. Use CLI `local-history diff` for unified text diff against the current live file. The guide is available through `local_history_guide` and `local-history://guide`.
+MCP does not currently expose undo, prompts, or watcher start tools. The guide is available through `local_history_guide` and `local-history://guide`.
 
 ## Zed Extension Notes
 

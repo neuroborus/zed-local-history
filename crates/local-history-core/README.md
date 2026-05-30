@@ -12,7 +12,8 @@ Core domain and storage layer for `zed-local-history`.
 - restore safety snapshots and restore-operation records;
 - raw, safety, hour, and segment history queries;
 - Markdown view generation and rebuild;
-- retention and prune behavior.
+- retention and prune behavior;
+- unified text diff from snapshot content to the current live file.
 
 ## Owns
 
@@ -37,4 +38,4 @@ Core domain and storage layer for `zed-local-history`.
 
 ## Validation
 
-Core tests should cover storage, restore safety, prune behavior, ignore rules, history grouping, and Markdown rendering without depending on editor or process behavior.
+Core tests should cover storage, restore safety, prune behavior, ignore rules, history grouping, Markdown rendering, and snapshot-to-live unified diff behavior without depending on editor or process behavior.

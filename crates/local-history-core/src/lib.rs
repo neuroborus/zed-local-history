@@ -1,3 +1,4 @@
+mod diff;
 mod error;
 mod hashing;
 mod identity;
@@ -6,6 +7,7 @@ mod layout;
 mod model;
 mod storage;
 
+pub use diff::{snapshot_to_current_unified_diff, SnapshotDiffError};
 pub use error::StorageError;
 pub use identity::{
     machine_salt, normalize_project_root, project_id_for_root, project_id_from_root_and_salt,
