@@ -8,22 +8,22 @@ This project stores previous saved states of files outside the user repository, 
 
 Three ways to recover the same snapshots — pick the surface that fits the moment.
 
-### Agent — ask for a change summary
+### Agent — natural language
 
-Ask in natural language; the Zed Agent Panel uses MCP tools (`local_history_recent_snapshots`, `local_history_diff_snapshot`, …) to list recent saves, diff against the live file, and summarize what changed — without Git and without memorizing CLI subcommands.
+Ask the Zed Agent Panel (or any MCP host) in plain language — whatever you need from local history: what changed, an older version, a diff, restore, status, and so on. The agent routes the request through MCP; you do not need Git or a memorized command list.
 
 <p align="center">
-  <img src="docs/zed-lh-agent.gif" alt="Zed Agent Panel: natural-language question about edit history, MCP tools return a change summary" width="900">
+  <img src="docs/zed-lh-agent.gif" alt="Zed Agent Panel: natural-language question about file history answered via MCP" width="900">
 </p>
 
 See [Agent usage](#agent-usage) and [llms.txt](llms.txt) for intent mapping and MCP↔CLI equivalents.
 
-### CLI — recover from the terminal
+### CLI — terminal workflow
 
-Use `local-history` for status, recent snapshots, show, diff, restore, and undo. Works in any shell-only agent host or when MCP tools are not exposed.
+Same snapshots from the shell: browse, inspect, compare, restore, or undo when you prefer the terminal or MCP is not available.
 
 <p align="center">
-  <img src="docs/zed-lh-cli.gif" alt="Terminal: local-history status, recent, diff, and restore workflow" width="900">
+  <img src="docs/zed-lh-cli.gif" alt="Terminal: local-history recovery workflow" width="900">
 </p>
 
 Command reference: [How To CLI](#how-to-cli) below.
