@@ -106,7 +106,7 @@ Check whether the extension can:
 - detect OS and architecture;
 - download a file;
 - make a downloaded binary executable;
-- run a short external command;
+- run short external commands through declared, narrow `process:exec` capabilities;
 - resolve the current project/worktree root;
 - open or expose a generated Markdown file in a usable way.
 
@@ -1479,13 +1479,15 @@ Validate the real Zed user path instead of only compile-time extension checks.
    - dev `PATH` binary path;
    - cached release asset path;
    - incompatible `PATH` binary fallback.
-5. Confirm the returned Markdown paths are usable in real editor workflow.
+5. Confirm `extension.toml` does not require wildcard `process:exec`.
+6. Confirm the returned Markdown paths are usable in real editor workflow.
 
 ### Acceptance
 
 - Extension can resolve or download the sidecar.
 - Slash commands execute correctly inside a real worktree.
 - Restore works through the extension path.
+- Extension process capabilities stay limited to local-history binaries and narrow lookup helpers.
 - Error messages are understandable when capabilities are missing.
 
 ## 4. Real Project Watcher Validation

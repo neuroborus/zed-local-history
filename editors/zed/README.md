@@ -57,17 +57,18 @@ Current behavior:
 - tagged releases publish `SHA256SUMS.txt` alongside the archives that the extension bootstrap relies on
 - release bootstrap currently has explicit asset mappings for macOS `x86_64` / `aarch64`, Linux `x86_64` / `aarch64`, and Windows `x86_64` / `aarch64`
 - the extension registers `local-history` as a context server and starts the resolved `local-history-mcp` binary
-- cached release binaries live under versioned paths such as `local-history-mcp-0.1.0/<asset-stem>/local-history-mcp`; the extension canonicalizes those paths before executing them because Zed's extension host runs `ProcessCommand` and context-server commands on the host without joining the extension work directory
-- PATH/dev MCP binaries are resolved to absolute paths via the host OS lookup command (`command -v` on Unix, `where` on Windows); if lookup resolution fails, the extension falls back to the cached/downloaded release binary. `finalize_context_server_spawn_path` rejects bare names and unresolved relative paths but does not call `fs::metadata` on host paths (WASM cannot see them even after a successful `--version` probe)
+- cached release binaries live under versioned paths such as `local-history-mcp-0.1.0/<asset-stem>/local-history-mcp`; the extension resolves the containing directory and launches the stable binary name with that directory prepended to `PATH`, so the manifest can avoid wildcard process execution
+- PATH/dev MCP binaries are resolved through the host OS lookup command (`command -v` on Unix, `where` on Windows); if lookup resolution fails, the extension falls back to the cached/downloaded release binary. For context-server startup, the extension returns `local-history-mcp` / `local-history-mcp.exe` plus a `PATH` override instead of returning a dynamic absolute executable path.
 
 ## Extension capabilities
 
 Zed 1.4+ requires explicit capability declarations in `extension.toml` before the WASM extension may download release assets or execute sidecar/MCP binaries:
 
-- `process:exec` for `local-history-sidecar`, `local-history-mcp`, and cached release paths under the extension work directory
+- `process:exec` for the stable binary names `local-history-sidecar`, `local-history-sidecar.exe`, `local-history-mcp`, and `local-history-mcp.exe`
+- narrow `process:exec` entries for MCP PATH lookup helpers: `sh -c "command -v local-history-mcp"` on Unix and `where local-history-mcp[.exe]` on Windows
 - `download_file` from `github.com/neuroborus/zed-local-history/**`
 
-Without these entries, Agent Panel settings show **Local History** but the MCP toggle fails to stay on and `~/.local/share/zed/logs/Zed.log` reports missing `process:exec` capabilities.
+The manifest intentionally does not grant `{ kind = "process:exec", command = "*", args = ["**"] }`. Without the narrower entries above, Agent Panel settings show **Local History** but the MCP toggle fails to stay on and `~/.local/share/zed/logs/Zed.log` reports missing `process:exec` capabilities.
 
 Current limitations:
 

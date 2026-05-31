@@ -706,8 +706,8 @@ ERROR [crates/acp_thread/src/acp_thread.rs:2345] failed to get old checkpoint: o
 Interpretation:
 
 - the first error means `editors/zed/extension.toml` is missing required `capabilities` entries;
-- the second error means the extension returned a relative cached binary path; current extension code canonicalizes cached paths before execution—reinstall the dev extension after pulling that fix;
-- the third error means the extension tried to `fs::metadata` a host absolute path from WASM; current code only validates path shape and trusts the prior `--version` probe—reinstall the dev extension after pulling that fix;
+- the second error means the extension returned a relative cached binary path; current extension code launches cached binaries through stable names with the cache directory prepended to `PATH`—reinstall the dev extension after pulling that fix;
+- the third error means the extension tried to validate or return a host absolute path from WASM; current code returns `local-history-mcp` / `local-history-mcp.exe` plus a `PATH` override after a successful `--version` probe—reinstall the dev extension after pulling that fix;
 - `failed to get old checkpoint: oneshot canceled` is Zed Agent Panel internal checkpoint noise when sending a prompt; it is **not** a local-history MCP failure if the thread continues with `Thread::send`;
 - installing the dev extension does **not** add `local-history-sidecar` to the shell `PATH`; use Agent MCP tools or release CLI on `PATH`, not `local_history_status` as a shell command;
 - enable the server in **Agent Settings** (`agent: open settings`), not via `@` mentions in the chat input.
@@ -743,7 +743,7 @@ Expected:
 | `+` menu has no **New Text Thread** | Zed 1.4.4 UI may omit text threads | sidecar CLI + MCP; optional `agent.default_view` |
 | MCP agent does nothing | no model selected or MCP not configured | pick a model; verify `context_servers` / extension MCP bootstrap |
 | **Local History** MCP toggle off / won't enable | missing `capabilities` in extension manifest or stale dev extension WASM | reinstall dev extension after `zed-ci`; see [MCP toggle troubleshooting](#troubleshooting-mcp-toggle--context-server-startup-2026-05-31) |
-| MCP toggle off after dev MCP on PATH | WASM `finalize_*` probed host binary with `fs::metadata` | pull latest extension; reinstall dev extension; relaunch Zed |
+| MCP toggle off after dev MCP on PATH | stale extension still returning dynamic host paths instead of stable command + `PATH` override | pull latest extension; reinstall dev extension; relaunch Zed |
 | Tool list shows only timestamps/hashes | stale MCP binary or agent skipped `presentation=rich` | `cargo build -p local-history-mcp`; relaunch with `target/debug` in PATH; check tool output for `content:` lines |
 | Agent ignores `ids_only` request | model did not pass `presentation: "ids_only"` | repeat prompt explicitly; verify tool args in Agent tool UI |
 | `failed to get old checkpoint: oneshot canceled` | Zed ACP thread checkpoint race | ignore if Agent continues; unrelated to local-history |
@@ -770,8 +770,9 @@ After creating a real tag such as `v0.1.0`, validate separately:
 3. Release assets include sidecar-only and MCP-only archives used by the extension bootstrap.
 4. `SHA256SUMS.txt` is published.
 5. Install the dev extension without `target/debug` in `PATH`.
-6. Verify slash commands download the matching sidecar archive (only where Text Thread slash UI exists).
-7. Verify Agent Panel MCP startup downloads the matching MCP archive.
+6. Confirm `editors/zed/extension.toml` has no wildcard `process:exec` entry.
+7. Verify slash commands download the matching sidecar archive (only where Text Thread slash UI exists).
+8. Verify Agent Panel MCP startup downloads the matching MCP archive and enables **Local History** with the narrower capabilities.
 
 ## MVP Acceptance
 

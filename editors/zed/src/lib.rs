@@ -35,7 +35,7 @@ impl zed::Extension for LocalHistoryExtension {
                 let binary = resolve_sidecar_binary(worktree)?;
                 let value =
                     run_sidecar_json(worktree, vec!["status".to_string(), worktree.root_path()])?;
-                render_status_output(&binary, &value)
+                render_status_output(&binary.display_path, &value)
             }
             "local-history-start-watcher" => {
                 expect_no_args(&command.name, &args)?;
@@ -150,10 +150,12 @@ impl zed::Extension for LocalHistoryExtension {
             ));
         }
 
+        let binary = resolve_mcp_binary()?;
+        let env = binary.env(zed::current_platform().0, Vec::<(String, String)>::new());
         Ok(zed::Command {
-            command: finalize_context_server_spawn_path(resolve_mcp_binary()?)?,
+            command: binary.command,
             args: Vec::new(),
-            env: Vec::new(),
+            env,
         })
     }
 }
@@ -165,6 +167,53 @@ struct ReleaseTarget {
     archive_name: &'static str,
     binary_name: &'static str,
     file_type: DownloadedFileType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BinaryCommand {
+    command: String,
+    path_prefix: Option<String>,
+    display_path: String,
+}
+
+impl BinaryCommand {
+    fn lookup_name(command: impl Into<String>) -> Self {
+        let command = command.into();
+        Self {
+            display_path: command.clone(),
+            command,
+            path_prefix: None,
+        }
+    }
+
+    fn from_path(os: Os, path: &str, fallback_command: &str) -> Self {
+        if let Some((directory, file_name)) = split_executable_path(os, path) {
+            Self {
+                command: file_name,
+                path_prefix: Some(directory),
+                display_path: path.to_string(),
+            }
+        } else {
+            Self::lookup_name(fallback_command)
+        }
+    }
+
+    fn env(
+        &self,
+        os: Os,
+        base_env: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Vec<(String, String)> {
+        let mut env = base_env
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect::<Vec<_>>();
+
+        if let Some(path_prefix) = &self.path_prefix {
+            prepend_path_env(os, &mut env, path_prefix);
+        }
+
+        env
+    }
 }
 
 fn expect_no_args(command_name: &str, args: &[String]) -> Result<(), String> {
@@ -193,14 +242,14 @@ fn run_sidecar_json(worktree: &zed::Worktree, args: Vec<String>) -> Result<Value
 
 fn run_sidecar_json_with_binary(
     worktree: &zed::Worktree,
-    binary: &str,
+    binary: &BinaryCommand,
     args: Vec<String>,
 ) -> Result<Value, String> {
-    let binary = resolve_executable_path(binary)?;
-    let binary_label = binary.clone();
-    let mut command = ProcessCommand::new(binary)
+    let (os, _) = zed::current_platform();
+    let binary_label = binary.display_path.clone();
+    let mut command = ProcessCommand::new(binary.command.clone())
         .args(args.iter().cloned())
-        .envs(worktree.shell_env());
+        .envs(binary.env(os, worktree.shell_env()));
     let output = command
         .output()
         .map_err(|error| format!("failed to execute `{binary_label}`: {error}"))?;
@@ -226,12 +275,12 @@ fn run_sidecar_json_with_binary(
         .map_err(|error| format!("failed to parse sidecar JSON output: {error}"))
 }
 
-fn resolve_sidecar_binary(worktree: &zed::Worktree) -> Result<String, String> {
+fn resolve_sidecar_binary(worktree: &zed::Worktree) -> Result<BinaryCommand, String> {
     let (os, architecture) = zed::current_platform();
 
-    if let Some(path) = sidecar_on_path(worktree, os) {
-        if sidecar_is_compatible(worktree, &path)? {
-            return Ok(path);
+    if let Some(binary) = sidecar_on_path(worktree, os) {
+        if sidecar_is_compatible(worktree, &binary)? {
+            return Ok(binary);
         }
     }
 
@@ -240,9 +289,10 @@ fn resolve_sidecar_binary(worktree: &zed::Worktree) -> Result<String, String> {
 
     if binary_exists(&cached_path) {
         ensure_binary_executable(target, &cached_path)?;
+        let binary = cached_binary_command(os, target, &cached_path)?;
 
-        if sidecar_is_compatible(worktree, &cached_path)? {
-            return resolve_executable_path(&cached_path);
+        if sidecar_is_compatible(worktree, &binary)? {
+            return Ok(binary);
         }
     }
 
@@ -250,10 +300,11 @@ fn resolve_sidecar_binary(worktree: &zed::Worktree) -> Result<String, String> {
     ensure_binary_executable(target, &cached_path)?;
 
     if binary_exists(&cached_path) {
-        let version = sidecar_version(worktree, &cached_path)?;
+        let binary = cached_binary_command(os, target, &cached_path)?;
+        let version = sidecar_version(worktree, &binary)?;
 
         if is_compatible_sidecar_version(&version)? {
-            Ok(resolve_executable_path(&cached_path)?)
+            Ok(binary)
         } else {
             Err(incompatible_sidecar_error(&cached_path, &version))
         }
@@ -265,13 +316,17 @@ fn resolve_sidecar_binary(worktree: &zed::Worktree) -> Result<String, String> {
     }
 }
 
-fn resolve_mcp_binary() -> Result<String, String> {
+fn resolve_mcp_binary() -> Result<BinaryCommand, String> {
     let (os, architecture) = zed::current_platform();
 
-    if let Some(path) = mcp_on_path(os) {
-        if mcp_is_compatible(&path)? {
-            if let Ok(resolved_path) = resolve_lookup_binary_path(os, &path) {
-                return Ok(resolved_path);
+    if let Some(binary) = mcp_on_path(os) {
+        if mcp_is_compatible(&binary)? {
+            if let Ok(resolved_path) = resolve_lookup_binary_path(os, &binary.command) {
+                return Ok(BinaryCommand::from_path(
+                    os,
+                    &resolved_path,
+                    &binary.command,
+                ));
             }
         }
     }
@@ -281,9 +336,10 @@ fn resolve_mcp_binary() -> Result<String, String> {
 
     if binary_exists(&cached_path) {
         ensure_binary_executable(target, &cached_path)?;
+        let binary = cached_binary_command(os, target, &cached_path)?;
 
-        if mcp_is_compatible(&cached_path)? {
-            return resolve_executable_path(&cached_path);
+        if mcp_is_compatible(&binary)? {
+            return Ok(binary);
         }
     }
 
@@ -291,10 +347,11 @@ fn resolve_mcp_binary() -> Result<String, String> {
     ensure_binary_executable(target, &cached_path)?;
 
     if binary_exists(&cached_path) {
-        let version = mcp_version(&cached_path)?;
+        let binary = cached_binary_command(os, target, &cached_path)?;
+        let version = mcp_version(&binary)?;
 
         if is_compatible_mcp_version(&version)? {
-            Ok(resolve_executable_path(&cached_path)?)
+            Ok(binary)
         } else {
             Err(incompatible_mcp_error(&cached_path, &version))
         }
@@ -343,32 +400,38 @@ fn install_release_asset(
     Ok(())
 }
 
-fn sidecar_is_compatible(worktree: &zed::Worktree, binary: &str) -> Result<bool, String> {
+fn sidecar_is_compatible(worktree: &zed::Worktree, binary: &BinaryCommand) -> Result<bool, String> {
     match sidecar_version(worktree, binary) {
         Ok(version) => is_compatible_sidecar_version(&version),
         Err(_) => Ok(false),
     }
 }
 
-fn sidecar_version(worktree: &zed::Worktree, binary: &str) -> Result<String, String> {
+fn sidecar_version(worktree: &zed::Worktree, binary: &BinaryCommand) -> Result<String, String> {
     let value = run_sidecar_json_with_binary(worktree, binary, vec!["version".to_string()])?;
     json_string(&value, "sidecar_version")
         .map(str::to_string)
-        .ok_or_else(|| format!("`{binary} version` did not return `sidecar_version`"))
+        .ok_or_else(|| {
+            format!(
+                "`{} version` did not return `sidecar_version`",
+                binary.display_path
+            )
+        })
 }
 
-fn mcp_is_compatible(binary: &str) -> Result<bool, String> {
+fn mcp_is_compatible(binary: &BinaryCommand) -> Result<bool, String> {
     match mcp_version(binary) {
         Ok(version) => is_compatible_mcp_version(&version),
         Err(_) => Ok(false),
     }
 }
 
-fn mcp_version(binary: &str) -> Result<String, String> {
-    let binary = resolve_executable_path(binary)?;
-    let binary_label = binary.clone();
-    let output = ProcessCommand::new(binary)
+fn mcp_version(binary: &BinaryCommand) -> Result<String, String> {
+    let (os, _) = zed::current_platform();
+    let binary_label = binary.display_path.clone();
+    let output = ProcessCommand::new(binary.command.clone())
         .args(["--version"])
+        .envs(binary.env(os, Vec::<(String, String)>::new()))
         .output()
         .map_err(|error| format!("failed to execute `{binary_label} --version`: {error}"))?;
 
@@ -396,25 +459,80 @@ fn mcp_version(binary: &str) -> Result<String, String> {
     }
 }
 
-fn sidecar_on_path(worktree: &zed::Worktree, os: Os) -> Option<String> {
-    worktree.which(SIDECAR_BINARY_STEM).or_else(|| {
-        if matches!(os, Os::Windows) {
-            worktree.which("local-history-sidecar.exe")
-        } else {
-            None
-        }
-    })
+fn sidecar_on_path(worktree: &zed::Worktree, os: Os) -> Option<BinaryCommand> {
+    [SIDECAR_BINARY_STEM, "local-history-sidecar.exe"]
+        .into_iter()
+        .filter(|name| matches!(os, Os::Windows) || *name == SIDECAR_BINARY_STEM)
+        .find_map(|name| {
+            worktree
+                .which(name)
+                .map(|path| BinaryCommand::from_path(os, &path, name))
+        })
 }
 
-fn mcp_on_path(os: Os) -> Option<String> {
-    if mcp_is_compatible(MCP_BINARY_STEM).unwrap_or(false) {
-        return Some(MCP_BINARY_STEM.to_string());
-    }
+fn mcp_on_path(os: Os) -> Option<BinaryCommand> {
+    [MCP_BINARY_STEM, "local-history-mcp.exe"]
+        .into_iter()
+        .filter(|name| matches!(os, Os::Windows) || *name == MCP_BINARY_STEM)
+        .find_map(|name| {
+            let binary = BinaryCommand::lookup_name(name);
+            if mcp_is_compatible(&binary).unwrap_or(false) {
+                Some(binary)
+            } else {
+                None
+            }
+        })
+}
 
-    if matches!(os, Os::Windows) && mcp_is_compatible("local-history-mcp.exe").unwrap_or(false) {
-        Some("local-history-mcp.exe".to_string())
+fn cached_binary_command(
+    os: Os,
+    target: ReleaseTarget,
+    cached_path: &str,
+) -> Result<BinaryCommand, String> {
+    let resolved_path = resolve_executable_path(cached_path)?;
+    Ok(BinaryCommand::from_path(
+        os,
+        &resolved_path,
+        target.binary_name,
+    ))
+}
+
+fn split_executable_path(os: Os, path: &str) -> Option<(String, String)> {
+    let split_at = if matches!(os, Os::Windows) {
+        path.rfind(['\\', '/'])
     } else {
+        path.rfind('/')
+    }?;
+
+    let directory = path[..split_at].to_string();
+    let file_name = path[split_at + 1..].to_string();
+
+    if directory.is_empty() || file_name.is_empty() {
         None
+    } else {
+        Some((directory, file_name))
+    }
+}
+
+fn prepend_path_env(os: Os, env: &mut Vec<(String, String)>, path_prefix: &str) {
+    let path_key_index = env.iter().position(|(key, _)| {
+        if matches!(os, Os::Windows) {
+            key.eq_ignore_ascii_case("PATH")
+        } else {
+            key == "PATH"
+        }
+    });
+
+    let separator = if matches!(os, Os::Windows) { ";" } else { ":" };
+
+    if let Some(index) = path_key_index {
+        if env[index].1.is_empty() {
+            env[index].1 = path_prefix.to_string();
+        } else {
+            env[index].1 = format!("{path_prefix}{separator}{}", env[index].1);
+        }
+    } else {
+        env.push(("PATH".to_string(), path_prefix.to_string()));
     }
 }
 
@@ -490,29 +608,6 @@ fn path_lookup_command(os: Os, binary: &str) -> (&'static str, Vec<String>) {
     } else {
         ("sh", vec!["-c".to_string(), format!("command -v {binary}")])
     }
-}
-
-/// Zed spawns context servers without the extension workdir as cwd, so relative cached
-/// paths fail with ENOENT and bare lookup names depend on host PATH inheritance.
-///
-/// Do not probe absolute paths with `fs::metadata` here: the WASM host cannot see host
-/// binaries such as `target/debug/local-history-mcp` even after a successful version probe.
-fn finalize_context_server_spawn_path(path: String) -> Result<String, String> {
-    let candidate = Path::new(&path);
-
-    if candidate.is_absolute() {
-        return Ok(path);
-    }
-
-    if path.contains('/') || path.contains('\\') {
-        return Err(format!(
-            "context server command must be absolute after resolution, got relative path `{path}`"
-        ));
-    }
-
-    Err(format!(
-        "context server command must be absolute after resolution, got bare lookup name `{path}`"
-    ))
 }
 
 fn cleanup_old_installs(prefix: &str, current_install_dir: &str) -> Result<(), String> {
@@ -861,10 +956,10 @@ fn json_value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cached_mcp_path, extension_version, finalize_context_server_spawn_path,
-        is_compatible_mcp_version, is_compatible_sidecar_version, mcp_install_directory_name,
-        mcp_release_target, parse_semver_triplet, path_lookup_command, release_tag, release_target,
-        resolve_executable_path, sidecar_install_directory_name, ReleaseTarget,
+        cached_binary_command, cached_mcp_path, extension_version, is_compatible_mcp_version,
+        is_compatible_sidecar_version, mcp_install_directory_name, mcp_release_target,
+        parse_semver_triplet, path_lookup_command, release_tag, release_target,
+        resolve_executable_path, sidecar_install_directory_name, BinaryCommand, ReleaseTarget,
     };
     use std::path::Path;
     use zed_extension_api::{Architecture, DownloadedFileType, Os};
@@ -1003,8 +1098,18 @@ mod tests {
             "extension must declare process:exec for local-history-mcp"
         );
         assert!(
-            EXTENSION_MANIFEST.contains(r#"command = "*""#),
-            "extension must declare wildcard process:exec for versioned cache paths"
+            EXTENSION_MANIFEST.contains(r#"command = "local-history-sidecar""#),
+            "extension must declare process:exec for local-history-sidecar"
+        );
+        assert!(
+            EXTENSION_MANIFEST.contains(r#"command = "sh""#)
+                && EXTENSION_MANIFEST.contains("command -v local-history-mcp")
+                && EXTENSION_MANIFEST.contains(r#"command = "where""#),
+            "extension must declare narrow PATH lookup helpers for MCP dev binaries"
+        );
+        assert!(
+            !EXTENSION_MANIFEST.contains(r#"command = "*""#),
+            "extension must not grant wildcard process execution"
         );
         assert!(
             EXTENSION_MANIFEST.contains("download_file")
@@ -1015,47 +1120,52 @@ mod tests {
     }
 
     #[test]
-    fn finalize_rejects_unresolved_spawn_paths() {
-        assert!(finalize_context_server_spawn_path("local-history-mcp".to_string()).is_err());
-        assert!(finalize_context_server_spawn_path(
-            "local-history-mcp-0.1.0/local-history-mcp-x86_64-unknown-linux-gnu/local-history-mcp"
-                .to_string()
-        )
-        .is_err());
-    }
+    fn binary_command_uses_stable_command_name_and_path_prefix() {
+        let binary = BinaryCommand::from_path(
+            Os::Linux,
+            "/tmp/local-history-cache/local-history-mcp",
+            "local-history-mcp",
+        );
 
-    #[test]
-    fn finalize_accepts_absolute_paths_without_host_filesystem_probe() {
-        let path = if cfg!(windows) {
-            r"C:\Program Files\local-history-mcp.exe".to_string()
-        } else {
-            "/usr/local/bin/local-history-mcp".to_string()
-        };
-
+        assert_eq!(binary.command, "local-history-mcp");
         assert_eq!(
-            finalize_context_server_spawn_path(path.clone())
-                .expect("absolute path must pass without WASM-visible file probe"),
-            path
+            binary.path_prefix.as_deref(),
+            Some("/tmp/local-history-cache")
+        );
+        assert_eq!(
+            binary.display_path,
+            "/tmp/local-history-cache/local-history-mcp"
+        );
+
+        let env = binary.env(Os::Linux, vec![("PATH", "/usr/bin")]);
+        assert_eq!(
+            env,
+            vec![(
+                "PATH".to_string(),
+                "/tmp/local-history-cache:/usr/bin".to_string()
+            )]
         );
     }
 
     #[test]
-    fn finalize_accepts_existing_absolute_paths() {
-        let base = std::env::temp_dir().join(format!(
-            "local-history-zed-spawn-test-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&base).expect("temp dir must be creatable");
-        let binary = base.join("local-history-mcp");
-        std::fs::write(&binary, b"").expect("placeholder binary must be writable");
+    fn binary_command_uses_windows_path_separator() {
+        let binary = BinaryCommand::from_path(
+            Os::Windows,
+            r"C:\tools\local-history-mcp.exe",
+            "local-history-mcp.exe",
+        );
 
-        let resolved = finalize_context_server_spawn_path(binary.to_string_lossy().into_owned())
-            .expect("absolute existing binary must pass spawn validation");
+        assert_eq!(binary.command, "local-history-mcp.exe");
+        assert_eq!(binary.path_prefix.as_deref(), Some(r"C:\tools"));
 
-        assert!(Path::new(&resolved).is_absolute());
-        assert!(Path::new(&resolved).exists());
-
-        let _ = std::fs::remove_dir_all(base);
+        let env = binary.env(Os::Windows, vec![("Path", r"C:\Windows\System32")]);
+        assert_eq!(
+            env,
+            vec![(
+                "Path".to_string(),
+                r"C:\tools;C:\Windows\System32".to_string()
+            )]
+        );
     }
 
     #[test]
@@ -1079,13 +1189,17 @@ mod tests {
         std::env::set_current_dir(&base).expect("test must chdir into temp cache root");
 
         let relative = cached_mcp_path(target);
-        let resolved =
-            resolve_executable_path(&relative).expect("relative cache path must resolve");
-        let spawn_path = finalize_context_server_spawn_path(resolved)
-            .expect("resolved cache path must be spawn-ready");
+        let binary =
+            cached_binary_command(Os::Linux, target, &relative).expect("cache path must resolve");
+        let path_prefix = binary
+            .path_prefix
+            .as_deref()
+            .expect("cache binary must provide a PATH prefix");
 
-        assert!(Path::new(&spawn_path).is_absolute());
-        assert!(Path::new(&spawn_path).exists());
+        assert_eq!(binary.command, "local-history-mcp");
+        assert!(Path::new(path_prefix).is_absolute());
+        assert!(Path::new(&binary.display_path).is_absolute());
+        assert!(Path::new(&binary.display_path).exists());
 
         std::env::set_current_dir(previous_dir).expect("test must restore previous dir");
         let _ = std::fs::remove_dir_all(base);

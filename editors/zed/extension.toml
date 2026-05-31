@@ -6,15 +6,17 @@ authors = ["neuroborus"]
 repository = "https://github.com/neuroborus/zed-local-history"
 schema_version = 1
 
-# Required for sidecar slash commands, MCP version probes, and release bootstrap.
-# Cached binaries live under versioned paths such as
-# local-history-mcp-0.1.0/local-history-mcp-x86_64-unknown-linux-gnu/local-history-mcp
+# Required for sidecar slash commands, MCP version probes, MCP PATH lookup,
+# and release bootstrap. Cached release binaries are launched through these
+# stable binary names with PATH pointed at the resolved cache directory.
 capabilities = [
   { kind = "process:exec", command = "local-history-sidecar", args = ["**"] },
   { kind = "process:exec", command = "local-history-sidecar.exe", args = ["**"] },
   { kind = "process:exec", command = "local-history-mcp", args = ["**"] },
   { kind = "process:exec", command = "local-history-mcp.exe", args = ["**"] },
-  { kind = "process:exec", command = "*", args = ["**"] },
+  { kind = "process:exec", command = "sh", args = ["-c", "command -v local-history-mcp"] },
+  { kind = "process:exec", command = "where", args = ["local-history-mcp"] },
+  { kind = "process:exec", command = "where", args = ["local-history-mcp.exe"] },
   { kind = "download_file", host = "github.com", path = ["neuroborus", "zed-local-history", "**"] },
 ]
 
