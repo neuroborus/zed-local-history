@@ -767,8 +767,8 @@ Current limitation:
 - the watcher is polling-based rather than OS-event-based;
 - project-local custom ignore files are not wired yet;
 - the Zed extension reveals Markdown paths instead of directly opening arbitrary external files;
-- release workflow and extension bootstrap still need live external validation on a real tagged release;
-- the MCP server still needs live validation inside a real Zed Agent `context_servers` setup and does not yet expose prompts, undo-restore, or watcher-start tools through MCP.
+- each new tag should pass the external validation checklist in [agents/ZED_MANUAL_TESTING.md](agents/ZED_MANUAL_TESTING.md) before store submission;
+- MCP exposes `local_history_status`, recent/view/diff/restore/prune, and the packaged guide; it does not yet expose prompts, undo-restore, or watcher-start (use CLI `local-history undo-restore` and `local-history-sidecar ensure-daemon` for those).
 
 ## Repository layout
 
