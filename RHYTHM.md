@@ -4,7 +4,8 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-30
 
-- Synced `agents/*` with current product state: MCP marked implemented (not planned), `llms.txt` vs contributor-doc split clarified, Stage 13.2 diff slice marked done, external validation covers diff and natural-language intent; trimmed duplicate intent prose from README Agent usage (canonical detail stays in `llms.txt`).
+- Added README Contributing section: points to the full `agents/` doc set, documents CI commands, requires walking through `agents/FINALIZE.md` before submit, and separates runtime `llms.txt` from contributor guides.
+- Extension store positioning updated: user-facing `extension.toml` description, dropped stale scaffold wording, README MCP limitations now list diff among exposed tools.
 - Human timestamp display in CLI and MCP now converts stored RFC3339 UTC values to the local system timezone. Storage, JSON output, and generated Markdown UTC labels stay unchanged; only human-readable tables and summaries use local time.
 - Trimmed `llms.txt` to ~115 lines: removed contributor architecture/docs-map duplication, merged MCP+CLI recommended sequences, compressed Markdown and sidecar notes into agent-ops essentials; kept intent mapping, safety semantics, and MCP↔CLI table.
 - Added natural-language intent mapping to `llms.txt` and MCP `SERVER_INSTRUCTIONS` (for example "what changed" / "edit history" → recent snapshots then diff or view when Git is unavailable or irrelevant).

@@ -827,3 +827,53 @@ Look up the generated view root:
 ```bash
 local-history view-root .
 ```
+
+## Contributing
+
+Contributions are welcome — issues, docs fixes, and focused pull requests.
+
+### Before you change code
+
+Read [`agents/README.md`](agents/README.md) for the contributor doc set: product goals, working agreements, development plan, manual testing, and the post-change checklist.
+
+Keep recovery logic in `local-history-core`. The CLI, sidecar, MCP server, and Zed extension should stay thin adapters. Restore must remain safety-first (safety snapshot before writing the live file).
+
+Runtime agent behavior belongs in [`llms.txt`](llms.txt), not in the contributor guides under `agents/`.
+
+### Build and test
+
+Native workspace (Rust 1.75.0):
+
+```bash
+cargo build
+cargo run -p xtask -- ci
+```
+
+Zed extension (`editors/zed` uses its own stable + `wasm32-wasip2` toolchain):
+
+```bash
+cargo run -p xtask -- zed-ci
+```
+
+Changes that touch both native crates and the extension:
+
+```bash
+cargo run -p xtask -- full-ci
+```
+
+Local Zed/MCP manual acceptance lives in the same [`agents/`](agents/README.md) doc set.
+
+### Before you submit
+
+Walk through [`agents/FINALIZE.md`](agents/FINALIZE.md) after your changes and confirm every applicable checklist item is covered — tests, CI, crate boundaries, recovery safety, docs, and commit scope — before you open a PR or consider the branch done.
+
+### Pull requests
+
+- Prefer small, focused diffs over broad refactors.
+- Comments, logs, and user-facing text in English.
+- Update docs when behavior or agent-facing contracts change (`README.md`, `llms.txt`, MCP `SERVER_INSTRUCTIONS`, and relevant `agents/*` files).
+- Note meaningful decisions in [`RHYTHM.md`](RHYTHM.md) when architecture or workflow changes.
+
+### License
+
+MIT — see [LICENSE](LICENSE).
