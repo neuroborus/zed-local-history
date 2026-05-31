@@ -19,6 +19,7 @@ const SERVER_NAME: &str = "local-history-mcp";
 const WATCHER_STALE_AFTER_SECONDS: u64 = 5;
 const AGENT_GUIDE_URI: &str = "local-history://guide";
 const AGENT_GUIDE_TEXT: &str = include_str!("../../../llms.txt");
+const MAX_MCP_CONTENT_DIFF_CHARS: usize = 20_000;
 const SERVER_INSTRUCTIONS: &str = "\
 Use these tools for filesystem-first local history recovery when the client exposes them.
 
@@ -284,12 +285,13 @@ fn tool_call_result(result: Result<Value, String>) -> Value {
                 .get("summary")
                 .and_then(Value::as_str)
                 .unwrap_or("local-history tool call completed");
+            let content_text = tool_content_text(&structured, summary);
 
             json!({
                 "content": [
                     {
                         "type": "text",
-                        "text": summary,
+                        "text": content_text,
                     }
                 ],
                 "structuredContent": structured,
@@ -307,6 +309,46 @@ fn tool_call_result(result: Result<Value, String>) -> Value {
             },
             "isError": true,
         }),
+    }
+}
+
+fn tool_content_text(structured: &Value, summary: &str) -> String {
+    if structured.get("uri").and_then(Value::as_str) == Some(AGENT_GUIDE_URI) {
+        if let Some(text) = structured.get("text").and_then(Value::as_str) {
+            return text.to_string();
+        }
+    }
+
+    if let Some(diff) = structured.get("diff").and_then(Value::as_str) {
+        return diff_content_text(summary, diff);
+    }
+
+    summary.to_string()
+}
+
+fn diff_content_text(summary: &str, diff: &str) -> String {
+    let (excerpt, truncated) = truncate_text(diff, MAX_MCP_CONTENT_DIFF_CHARS);
+    let mut text = format!("{summary}\n\n```diff\n{excerpt}");
+
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+
+    text.push_str("```");
+
+    if truncated {
+        text.push_str(&format!(
+            "\n\nDiff text truncated after {MAX_MCP_CONTENT_DIFF_CHARS} characters. Full diff is available in `structuredContent.diff`."
+        ));
+    }
+
+    text
+}
+
+fn truncate_text(value: &str, max_chars: usize) -> (String, bool) {
+    match value.char_indices().nth(max_chars) {
+        Some((index, _)) => (value[..index].to_string(), true),
+        None => (value.to_string(), false),
     }
 }
 
@@ -1369,7 +1411,10 @@ Usage:
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_message, AGENT_GUIDE_URI, MCP_PROTOCOL_VERSION};
+    use super::{
+        handle_message, tool_call_result, AGENT_GUIDE_URI, MAX_MCP_CONTENT_DIFF_CHARS,
+        MCP_PROTOCOL_VERSION,
+    };
     use local_history_core::{LocalHistoryStore, SnapshotKind, SnapshotWriteRequest};
     use serde_json::json;
     use std::fs;
@@ -1500,6 +1545,10 @@ mod tests {
         assert!(result["text"]
             .as_str()
             .expect("guide text must be a string")
+            .contains("Natural language intent mapping"));
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("guide content text must be present")
             .contains("Natural language intent mapping"));
     }
 
@@ -1707,8 +1756,37 @@ mod tests {
         assert_eq!(diff_result["unchanged"], false);
         assert!(diff_text.contains("-v1"));
         assert!(diff_text.contains("+v2"));
+        let content_text = diff_response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("diff content text must be present");
+        assert!(content_text.contains("```diff"));
+        assert!(content_text.contains("-v1"));
+        assert!(content_text.contains("+v2"));
 
         cleanup_test_root(&root);
+    }
+
+    #[test]
+    fn diff_tool_content_text_is_bounded() {
+        let tail_marker = "TAIL_MARKER";
+        let diff = format!(
+            "{}{}",
+            "a".repeat(MAX_MCP_CONTENT_DIFF_CHARS + 1),
+            tail_marker
+        );
+        let response = tool_call_result(Ok(json!({
+            "summary": "Large diff.",
+            "diff": diff.clone(),
+        })));
+        let content_text = response["content"][0]["text"]
+            .as_str()
+            .expect("diff content text must be present");
+
+        assert!(content_text.contains("Large diff."));
+        assert!(content_text.contains("```diff"));
+        assert!(content_text.contains("Diff text truncated"));
+        assert!(!content_text.contains(tail_marker));
+        assert_eq!(response["structuredContent"]["diff"], diff);
     }
 
     fn create_test_root(label: &str) -> PathBuf {

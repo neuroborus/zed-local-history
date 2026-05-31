@@ -4,6 +4,7 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-31
 
+- MCP tool `content` for text-only hosts: `local_history_guide` returns the full `llms.txt` guide in `content[0].text`; `local_history_diff_snapshot` adds a fenced diff excerpt (20k-char cap with truncation notice) while keeping the full unified diff in `structuredContent.diff`.
 - Pull-request CI now runs `cargo run -p xtask -- zed-ci` in a parallel `zed-extension` job (`wasm32-wasip2` toolchain) so extension changes are validated on every PR, not only locally. Release workflow bumps GitHub Actions to current majors (`actions/checkout@v6`, `actions/upload-artifact@v7`, `actions/download-artifact@v8`, `softprops/action-gh-release@v3`).
 - Zed MCP PATH lookup on Windows: `resolve_lookup_binary_path` uses `zed::current_platform()` host `Os` (`where` on Windows, `command -v` via `sh` on Unix) instead of `cfg!(windows)`; failed PATH resolution falls back to cached/downloaded MCP while keeping version compatibility checks on PATH binaries.
 - Unified diff hardening in `local-history-core`: line tokenization keeps trailing-newline state so `v1\n` vs `v1` is not reported as unchanged; common prefix/suffix trimming, a 1M-cell LCS cap, and replace-block fallback avoid quadratic memory on large CLI/MCP diffs.
