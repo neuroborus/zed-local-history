@@ -4,6 +4,7 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-31
 
+- Unix release bundles now ship `scripts/install.sh` for shell CLI installation: the installer copies `local-history`, `local-history-sidecar`, and `local-history-mcp` into `~/.local/bin` by default with `--prefix`, `--bin-dir`, and `--dry-run` overrides, prints a PATH hint when needed, and stays separate from the Zed extension's cached sidecar/MCP bootstrap; README documents the production CLI install path, Windows remains manual `.zip` extraction plus adding the chosen binary directory to `Path`.
 - Fixed Zed Agent MCP launch path handling: extension-managed `context_server_command` now returns the resolved MCP executable path instead of a stable command name that Zed would reinterpret relative to the extension directory; manual fallback docs use Zed's top-level custom-server `command` / `args` / `env` settings shape and a distinct `local-history-dev` ID.
 - Snapshot ID prefix contract unified in `local-history-core`: human CLI, MCP, and Markdown surfaces use the shared 12-character display prefix; restore/show/diff prefix lookup requires at least 6 characters and rejects shorter prefixes before scanning project databases.
 - Contributor docs now have a short current-state entrypoint (`agents/CURRENT_STATUS.md`): `agents/README.md` and the root contributing section point coding agents there before long roadmap files, while stale `.gitignore` wording in planning docs is marked as future policy rather than current behavior.

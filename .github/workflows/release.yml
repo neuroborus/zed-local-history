@@ -90,6 +90,7 @@ jobs:
           cp target/release/local-history${{ matrix.binary_suffix }} dist/
           cp target/release/local-history-sidecar${{ matrix.binary_suffix }} dist/
           cp target/release/local-history-mcp${{ matrix.binary_suffix }} dist/
+          cp scripts/install.sh dist/
           cp README.md LICENSE dist/
 
       - name: Package release bundle (Unix)
@@ -97,7 +98,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p package/${{ matrix.artifact_name }}
-          cp dist/local-history dist/local-history-sidecar dist/local-history-mcp dist/README.md dist/LICENSE package/${{ matrix.artifact_name }}/
+          cp dist/local-history dist/local-history-sidecar dist/local-history-mcp dist/install.sh dist/README.md dist/LICENSE package/${{ matrix.artifact_name }}/
+          chmod 0755 package/${{ matrix.artifact_name }}/install.sh
           tar -czf dist/${{ matrix.release_archive_name }} -C package ${{ matrix.artifact_name }}
 
       - name: Package release bundle (Windows)

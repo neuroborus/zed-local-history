@@ -26,7 +26,7 @@ Same snapshots from the shell: browse, inspect, compare, restore, or undo when y
   <img src="docs/zed-lh-cli.gif" alt="Terminal: local-history recovery workflow" width="900">
 </p>
 
-Command reference: [How To CLI](#how-to-cli) below.
+Install and command reference: [Install CLI](#install-cli) and [How To CLI](#how-to-cli) below.
 
 ### Markdown preview — browse generated history
 
@@ -45,6 +45,41 @@ zed "$(local-history view-root .)/README.md"
 Details: [History Storage And Markdown View](#history-storage-and-markdown-view).
 
 ---
+
+## Install CLI
+
+Installing the Zed extension does not add `local-history` to your shell `PATH`. The extension downloads and runs its own sidecar/MCP helpers for Zed. For terminal use, install the native release bundle separately.
+
+On Linux or macOS, unpack the bundle for your platform and run the bundled installer:
+
+```bash
+tar -xzf local-history-<platform>.tar.gz
+cd local-history-<platform>
+./install.sh
+```
+
+By default, `install.sh` copies `local-history`, `local-history-sidecar`, and `local-history-mcp` to `~/.local/bin`. Override the location when needed:
+
+```bash
+./install.sh --prefix "$HOME/.local"
+./install.sh --bin-dir "$HOME/.local/bin"
+```
+
+If the installer reports that the target directory is not on `PATH`, add it once in your shell profile:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Verify:
+
+```bash
+local-history --help
+local-history-sidecar health
+local-history-mcp --version
+```
+
+On Windows, unpack the `.zip` bundle and add the extracted directory, or another directory containing the three `.exe` files, to `Path`.
 
 ## How To CLI
 
