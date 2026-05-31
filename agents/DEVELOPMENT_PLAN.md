@@ -1075,6 +1075,25 @@ Acceptance:
 - a user can start watching, check status, list snapshots, render current history, restore, and undo through `local-history` without directly calling `local-history-sidecar`;
 - existing sidecar commands remain available for extension integration and debugging.
 
+### 11.3.2.1 Add release-bundle CLI installer
+
+The Zed extension bootstrap intentionally downloads sidecar/MCP binaries for Zed itself, but it must not pretend to install global shell commands. Users who want terminal workflows need a conventional native install path from the release bundle.
+
+Implement a small release-bundle installer:
+
+- ship a POSIX `install.sh` in Unix user bundles;
+- install `local-history`, `local-history-sidecar`, and `local-history-mcp` into `~/.local/bin` by default;
+- support `--prefix`, `--bin-dir`, `--dry-run`, and `--help`;
+- print a clear `PATH` hint when the target binary directory is not already visible to the shell;
+- keep extension-managed binary caches separate from user shell installation;
+- document Windows as manual `.zip` extraction plus adding the chosen binary directory to `Path` until a tested Windows installer is added.
+
+Local implementation status:
+
+- `scripts/install.sh` added;
+- release workflow packages `install.sh` into Unix user bundles;
+- README documents the production CLI install path separately from Zed extension bootstrap.
+
 ### 11.3.3 Add MCP agent operating context
 
 The Agent Panel can call tools, but tool names alone do not teach the model the product's recovery semantics or how to interpret natural-language requests such as "what changed". Provide a compact, maintained agent guide that explains storage, previous-state snapshots, restore safety, Git vs local-history routing, natural-language intent mapping, and MCP or CLI usage.
