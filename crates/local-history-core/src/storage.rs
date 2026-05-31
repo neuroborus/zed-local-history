@@ -16,6 +16,7 @@ use crate::model::{
     GeneratedMarkdownViewEntry, HourBucket, HourHistory, ProjectId, ProjectRecord, PruneReport,
     RestoreOperationRecord, RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId,
     SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord, WindowedFileHistory,
+    MIN_SNAPSHOT_ID_PREFIX_LEN, SNAPSHOT_ID_LEN,
 };
 
 const SCHEMA_SQL: &str = r#"
@@ -339,6 +340,19 @@ impl LocalHistoryStore {
         base_data_dir: impl AsRef<Path>,
         prefix: &str,
     ) -> Result<Vec<SnapshotId>, StorageError> {
+        let prefix_len = prefix.chars().count();
+
+        if prefix_len < MIN_SNAPSHOT_ID_PREFIX_LEN {
+            return Err(StorageError::SnapshotPrefixTooShort {
+                prefix_len,
+                min_len: MIN_SNAPSHOT_ID_PREFIX_LEN,
+            });
+        }
+
+        if prefix_len > SNAPSHOT_ID_LEN {
+            return Ok(Vec::new());
+        }
+
         let base_data_dir = base_data_dir.as_ref();
         let projects_dir = base_data_dir.join("projects");
 
@@ -2009,7 +2023,7 @@ fn snapshot_id(
     );
     let digest = sha256_hex(input.as_bytes());
 
-    digest[..24].to_string()
+    digest[..SNAPSHOT_ID_LEN].to_string()
 }
 
 fn restore_operation_id(
@@ -2384,7 +2398,7 @@ mod tests {
         markdown_link_target, LocalHistoryStore, SnapshotQuery, SnapshotWriteRequest, StorageError,
         SCHEMA_SQL,
     };
-    use crate::{RetentionPolicy, SnapshotId, SnapshotKind};
+    use crate::{RetentionPolicy, SnapshotId, SnapshotKind, MIN_SNAPSHOT_ID_PREFIX_LEN};
     use rusqlite::params;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -3342,11 +3356,32 @@ mod tests {
             .expect("prefix lookup must work");
         assert_eq!(exact_matches, vec![first_snapshot.id.clone()]);
 
-        let all_matches = LocalHistoryStore::find_snapshot_ids_by_prefix(&base_dir, "")
-            .expect("empty prefix lookup must work");
-        assert_eq!(all_matches.len(), 2);
-        assert!(all_matches.contains(&first_snapshot.id));
-        assert!(all_matches.contains(&second_snapshot.id));
+        let second_prefix = &second_snapshot.id.as_str()[..12];
+        let second_matches =
+            LocalHistoryStore::find_snapshot_ids_by_prefix(&base_dir, second_prefix)
+                .expect("prefix lookup must work");
+        assert_eq!(second_matches, vec![second_snapshot.id.clone()]);
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn rejects_snapshot_id_prefix_shorter_than_minimum() {
+        let (base_dir, _) = create_test_roots("short-prefix");
+        let short_prefix = "abcde";
+
+        assert!(short_prefix.len() < MIN_SNAPSHOT_ID_PREFIX_LEN);
+
+        let error = LocalHistoryStore::find_snapshot_ids_by_prefix(&base_dir, short_prefix)
+            .expect_err("short prefix lookup must fail before scanning projects");
+
+        assert!(matches!(
+            error,
+            StorageError::SnapshotPrefixTooShort {
+                prefix_len: 5,
+                min_len: MIN_SNAPSHOT_ID_PREFIX_LEN,
+            }
+        ));
 
         cleanup_test_roots(&base_dir);
     }

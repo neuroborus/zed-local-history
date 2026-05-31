@@ -27,7 +27,7 @@ MCP stdio adapter for agent-facing local-history tools.
 - Agent instructions and MCP resource exposure.
 - Read-only agent guide tool exposure.
 - Agent-facing error messages.
-- Snapshot ID prefix resolution for MCP tool input.
+- Snapshot ID prefix resolution for MCP tool input, including the shared 6-character minimum prefix length.
 
 ## Does Not Own
 

@@ -21,7 +21,7 @@ For runtime agent behavior, use root `llms.txt`. For user-facing commands and se
 - Restore is safety-first: the live file state is snapshotted before restore writes the selected snapshot.
 - Storage lives outside the user repository under the platform data directory. Generated Markdown is rebuildable presentation, not the durable source of truth.
 - Human CLI/MCP summaries display timestamps in local time with an explicit `UTC`, `+HH:MM`, or `+HH:MM:SS` suffix. JSON and structured MCP snapshot timestamps remain canonical UTC.
-- Stored snapshot IDs stay opaque. Human displays use the shared 12-character prefix; restore/show/diff accept unique prefixes.
+- Stored snapshot IDs stay opaque. Human displays use the shared 12-character prefix; restore/show/diff accept full IDs or unique prefixes of at least 6 characters.
 - Watcher status reports oversized snapshot skips with `skipped_snapshot_count` and `last_skipped_snapshot`.
 
 ## Current Limits

@@ -8,7 +8,7 @@ User-facing terminal interface for `zed-local-history`.
 
 - manual snapshot creation;
 - recent, list, show, diff, and browse commands;
-- restore by full snapshot ID, unique prefix, or recent-list number;
+- restore by full snapshot ID, unique prefix of at least 6 characters, or recent-list number;
 - safety-list, undo-restore, and restore-last-safety commands;
 - hour and segment history queries;
 - Markdown view commands;
@@ -23,7 +23,7 @@ User-facing terminal interface for `zed-local-history`.
 - Read-only inspection commands avoid creating or migrating storage; mutating commands use the write/open-or-create path.
 - Interactive browse behavior.
 - Unified text diff output from snapshot to current live file.
-- Snapshot ID prefix resolution for CLI input.
+- Snapshot ID prefix resolution for CLI input, including the shared 6-character minimum prefix length.
 
 ## Does Not Own
 

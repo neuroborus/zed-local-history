@@ -73,7 +73,7 @@ local-history browse /path/to/project
 # Restore from the latest list by number.
 local-history restore --project-root /path/to/project --recent 1
 
-# Restore by full snapshot ID or any unique snapshot ID prefix.
+# Restore by full snapshot ID or a unique snapshot ID prefix of at least 6 characters.
 local-history restore <snapshot-id-or-unique-prefix>
 
 # Undo the latest restore.
@@ -284,7 +284,7 @@ Important behavior:
 
 - `recent` shows raw user snapshots only;
 - human tables show 12-character snapshot ID prefixes, while `--json` includes full IDs;
-- `show` and `restore` accept a full snapshot ID or any unique snapshot ID prefix;
+- `show`, `diff`, and `restore` accept a full snapshot ID or a unique snapshot ID prefix of at least 6 characters;
 - safety snapshots are intentionally excluded from normal recent numbering;
 - `list` can include filtered or paginated snapshot views;
 - `recent`, `list`, `show`, `status`, and `safety-list` support `--json`.
@@ -301,7 +301,7 @@ This resolves the owning project automatically from external storage.
 
 ### 5. Restore safely
 
-Restore by full snapshot ID or unique snapshot ID prefix:
+Restore by full snapshot ID or unique snapshot ID prefix of at least 6 characters:
 
 ```bash
 local-history restore <snapshot-id-or-unique-prefix>
@@ -535,10 +535,10 @@ Current tool contract:
 
 - `local_history_guide` returns the same guide text as the `local-history://guide` resource for MCP clients that expose tools more reliably than resources;
 - most tools require explicit `project_root`;
-- snapshot view and restore work by full `snapshot_id` or any unique snapshot ID prefix;
+- snapshot view and restore work by full `snapshot_id` or a unique snapshot ID prefix of at least 6 characters;
 - all tools accept optional `data_dir` when you want to use a non-default local-history storage base directory;
 - `local_history_restore_snapshot` remains safety-first and creates a safety snapshot before writing the live file;
-- `local_history_diff_snapshot` returns unified text diff from snapshot to the current live file for the same snapshot ID or unique prefix accepted by view/restore, plus `unchanged` when the live file matches the snapshot;
+- `local_history_diff_snapshot` returns unified text diff from snapshot to the current live file for the same snapshot ID or accepted unique prefix used by view/restore, plus `unchanged` when the live file matches the snapshot;
 - `local_history_recent_snapshots` accepts optional `presentation`: `rich` (default, includes one-line content preview in the text summary many hosts show agents), `index` (timestamp/path/id only), or `ids_only` (markdown table of ID prefixes only). See [llms.txt](llms.txt) for agent routing.
 
 ### Agent usage

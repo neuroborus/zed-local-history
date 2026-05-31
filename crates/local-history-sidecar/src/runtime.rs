@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use local_history_core::{
     default_data_dir, matches_default_ignored_path, normalize_project_root, project_id_for_root,
     LocalHistoryStore, SnapshotId, SnapshotKind, SnapshotWriteRequest, StorageError, StorageLayout,
+    SNAPSHOT_ID_LEN,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -360,9 +361,10 @@ pub fn restore_snapshot(snapshot_id: &str) -> RuntimeResult<Value> {
 fn resolve_snapshot_id(input: &str) -> RuntimeResult<SnapshotId> {
     let snapshot_id = SnapshotId::new(input);
 
-    if LocalHistoryStore::open_default_for_snapshot_read_only(&snapshot_id)
-        .map_err(|error| error.to_string())?
-        .is_some()
+    if input.chars().count() == SNAPSHOT_ID_LEN
+        && LocalHistoryStore::open_default_for_snapshot_read_only(&snapshot_id)
+            .map_err(|error| error.to_string())?
+            .is_some()
     {
         return Ok(snapshot_id);
     }
@@ -869,9 +871,10 @@ fn current_unix_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        diff_project_states, read_status, reconcile_project_state, scan_project, segment_bounds_at,
-        should_reuse_existing_watcher, status_is_fresh, watcher_record_json, write_status,
-        FileState, ProjectState, WatcherSkippedSnapshotRecord, WatcherStatusRecord,
+        diff_project_states, read_status, reconcile_project_state, resolve_snapshot_id,
+        scan_project, segment_bounds_at, should_reuse_existing_watcher, status_is_fresh,
+        watcher_record_json, write_status, FileState, ProjectState, WatcherSkippedSnapshotRecord,
+        WatcherStatusRecord,
     };
     use local_history_core::{LocalHistoryStore, RetentionPolicy, SnapshotKind};
     use std::fs;
@@ -1128,6 +1131,14 @@ mod tests {
         );
         assert_eq!(json["last_skipped_snapshot"]["size_bytes"], 4_194_305);
         assert_eq!(json["last_skipped_snapshot"]["max_bytes"], 4_194_304);
+    }
+
+    #[test]
+    fn resolve_snapshot_id_rejects_too_short_prefix() {
+        let error = resolve_snapshot_id("abcde").expect_err("short prefix must fail");
+
+        assert!(error.contains("snapshot ID prefix is too short"));
+        assert!(error.contains("minimum is 6"));
     }
 
     #[test]

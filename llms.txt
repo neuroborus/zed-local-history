@@ -30,7 +30,7 @@ Human CLI/MCP output shows timestamps in the local system timezone with an expli
 Before modifying a live file, restore always creates a **safety snapshot** of the current state.
 
 - Restore targets one snapshot; IDs are opaque. Human and Markdown output use a 12-character display prefix.
-- `show`, `diff`, and `restore` accept a full snapshot ID or any **unique** prefix; ambiguous prefixes must fail clearly.
+- `show`, `diff`, and `restore` accept a full snapshot ID or a **unique** prefix of at least 6 characters; ambiguous or shorter prefixes must fail clearly.
 - `restore --project-root <path> --recent <n>` is the fastest path after `recent`.
 - `undo-restore <project-root>` reverts the last restore (CLI only; not in MCP yet).
 

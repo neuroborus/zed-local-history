@@ -21,7 +21,7 @@ Core domain and storage layer for `zed-local-history`.
 - SQLite schema and storage migrations in the current single-schema model.
 - Storage open modes: write/open-or-create for mutating workflows and read-only open for inspection paths.
 - Snapshot ID, project ID, content hash, and restore domain types.
-- Shared 12-character snapshot ID display prefix contract for CLI, MCP, and Markdown surfaces.
+- Shared snapshot ID contracts: 12-character display prefixes for CLI, MCP, and Markdown surfaces, and a 6-character minimum for prefix lookup.
 - Filesystem-browsable Markdown rendering from stored snapshots.
 - Safety-first restore behavior.
 - Shared human timestamp formatting (`format_timestamp_local`) for CLI and MCP display boundaries.

@@ -22,7 +22,7 @@ pub use model::{
     GeneratedMarkdownViewEntry, HourBucket, HourHistory, ProjectId, ProjectRecord, PruneReport,
     RestoreOperationRecord, RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId,
     SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord, WindowedFileHistory,
-    DISPLAY_SNAPSHOT_ID_PREFIX_LEN,
+    DISPLAY_SNAPSHOT_ID_PREFIX_LEN, MIN_SNAPSHOT_ID_PREFIX_LEN, SNAPSHOT_ID_LEN,
 };
 pub use storage::{LocalHistoryStore, SnapshotPage, SnapshotQuery, SnapshotWriteRequest};
 pub use time_format::{

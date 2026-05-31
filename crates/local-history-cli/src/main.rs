@@ -10,7 +10,7 @@ use local_history_core::{
     snapshot_to_current_unified_diff, HourBucket, HourHistory, LocalHistoryStore, PruneReport,
     RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId, SnapshotKind, SnapshotPage,
     SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout, TimeSegment,
-    WindowedFileHistory,
+    WindowedFileHistory, SNAPSHOT_ID_LEN,
 };
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
@@ -1041,9 +1041,10 @@ fn format_rfc3339(timestamp: OffsetDateTime) -> Result<String, String> {
 fn resolve_snapshot_id(input: &str) -> Result<SnapshotId, String> {
     let snapshot_id = SnapshotId::new(input);
 
-    if LocalHistoryStore::open_default_for_snapshot_read_only(&snapshot_id)
-        .map_err(|error| error.to_string())?
-        .is_some()
+    if input.chars().count() == SNAPSHOT_ID_LEN
+        && LocalHistoryStore::open_default_for_snapshot_read_only(&snapshot_id)
+            .map_err(|error| error.to_string())?
+            .is_some()
     {
         return Ok(snapshot_id);
     }
@@ -1300,8 +1301,8 @@ fn confirm(label: &str) -> Result<bool, String> {
 mod tests {
     use super::{
         ambiguous_snapshot_prefix_error, format_recent_line, render_preview,
-        render_snapshot_preview, resolve_time_filters, Cli, Commands, HistoryCommands,
-        RenderMarkdownCommands, SnapshotFilterArgs,
+        render_snapshot_preview, resolve_snapshot_id, resolve_time_filters, Cli, Commands,
+        HistoryCommands, RenderMarkdownCommands, SnapshotFilterArgs,
     };
     use clap::Parser;
     use local_history_core::{
@@ -1600,6 +1601,14 @@ mod tests {
         assert!(message.contains("snapshot prefix `abcdef` is ambiguous"));
         assert!(message.contains("abcdef1234567890abcdef12"));
         assert!(message.contains("abcdef999999999999999999"));
+    }
+
+    #[test]
+    fn resolve_snapshot_id_rejects_too_short_prefix() {
+        let error = resolve_snapshot_id("abcde").expect_err("short prefix must fail");
+
+        assert!(error.contains("snapshot ID prefix is too short"));
+        assert!(error.contains("minimum is 6"));
     }
 
     #[test]

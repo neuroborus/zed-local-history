@@ -7,7 +7,7 @@ use local_history_core::{
     default_data_dir, format_timestamp_local, init_local_offset_detection, normalize_project_root,
     project_id_for_root, snapshot_id_display_prefix, snapshot_to_current_unified_diff,
     LocalHistoryStore, RestoreOutcome, RetentionPolicy, SnapshotId, SnapshotKind, SnapshotPage,
-    SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout,
+    SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout, SNAPSHOT_ID_LEN,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -37,7 +37,7 @@ Core rules:
 - Most tools require an explicit absolute project_root.
 - Local history stores data outside the repository; generated Markdown is only a rebuildable browsing layer.
 - Raw snapshots store the previous known file state from before a save/delete, not the newly saved content.
-- Snapshot IDs are opaque. Short prefixes are accepted only when unique.
+- Snapshot IDs are opaque. Short prefixes are accepted only when they are at least 6 characters and unique.
 - Restore is state-changing and always creates a safety snapshot first.
 - Prefer local_history_view_snapshot before restoring unless the user already chose an exact snapshot.
 - Use local_history_diff_snapshot for unified text diff from snapshot to the current live file before restore when code-level inspection is needed.
@@ -1116,9 +1116,10 @@ fn required_snapshot_id(
 fn resolve_snapshot_id(data_dir: &Path, input: &str) -> Result<SnapshotId, String> {
     let snapshot_id = SnapshotId::new(input);
 
-    if LocalHistoryStore::open_for_snapshot_id_read_only(data_dir, &snapshot_id)
-        .map_err(|error| error.to_string())?
-        .is_some()
+    if input.chars().count() == SNAPSHOT_ID_LEN
+        && LocalHistoryStore::open_for_snapshot_id_read_only(data_dir, &snapshot_id)
+            .map_err(|error| error.to_string())?
+            .is_some()
     {
         return Ok(snapshot_id);
     }
@@ -1424,13 +1425,13 @@ fn tool_local_history_view_snapshot() -> Value {
     json!({
         "name": "local_history_view_snapshot",
         "title": "View Local Snapshot",
-        "description": "Return metadata and a preview for one snapshot by full snapshot ID or unique snapshot ID prefix.",
+        "description": "Return metadata and a preview for one snapshot by full snapshot ID or unique snapshot ID prefix of at least 6 characters.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "snapshot_id": {
                     "type": "string",
-                    "description": "Full local-history snapshot ID or unique snapshot ID prefix."
+                    "description": "Full local-history snapshot ID or unique snapshot ID prefix of at least 6 characters."
                 },
                 "data_dir": {
                     "type": "string",
@@ -1453,13 +1454,13 @@ fn tool_local_history_diff_snapshot() -> Value {
     json!({
         "name": "local_history_diff_snapshot",
         "title": "Diff Local Snapshot",
-        "description": "Return a unified text diff from one snapshot to the current live file by full snapshot ID or unique snapshot ID prefix.",
+        "description": "Return a unified text diff from one snapshot to the current live file by full snapshot ID or unique snapshot ID prefix of at least 6 characters.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "snapshot_id": {
                     "type": "string",
-                    "description": "Full local-history snapshot ID or unique snapshot ID prefix."
+                    "description": "Full local-history snapshot ID or unique snapshot ID prefix of at least 6 characters."
                 },
                 "data_dir": {
                     "type": "string",
@@ -1482,13 +1483,13 @@ fn tool_local_history_restore_snapshot() -> Value {
     json!({
         "name": "local_history_restore_snapshot",
         "title": "Restore Local Snapshot",
-        "description": "Restore one snapshot by full snapshot ID or unique snapshot ID prefix. This always creates a safety snapshot first.",
+        "description": "Restore one snapshot by full snapshot ID or unique snapshot ID prefix of at least 6 characters. This always creates a safety snapshot first.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "snapshot_id": {
                     "type": "string",
-                    "description": "Full local-history snapshot ID or unique snapshot ID prefix."
+                    "description": "Full local-history snapshot ID or unique snapshot ID prefix of at least 6 characters."
                 },
                 "data_dir": {
                     "type": "string",
@@ -1578,8 +1579,8 @@ Usage:
 #[cfg(test)]
 mod tests {
     use super::{
-        handle_message, resolve_time_filters, status_summary, tool_call_result, AGENT_GUIDE_URI,
-        MAX_MCP_CONTENT_DIFF_CHARS, MCP_PROTOCOL_VERSION,
+        handle_message, resolve_snapshot_id, resolve_time_filters, status_summary,
+        tool_call_result, AGENT_GUIDE_URI, MAX_MCP_CONTENT_DIFF_CHARS, MCP_PROTOCOL_VERSION,
     };
     use local_history_core::{
         snapshot_id_display_prefix, LocalHistoryStore, SnapshotKind, SnapshotWriteRequest,
@@ -2049,6 +2050,15 @@ mod tests {
 
         assert!(error.contains("invalid timestamp"));
         assert!(error.contains("not-rfc3339"));
+    }
+
+    #[test]
+    fn resolve_snapshot_id_rejects_too_short_prefix() {
+        let error = resolve_snapshot_id(Path::new("/tmp/local-history-test-data"), "abcde")
+            .expect_err("short prefix must fail");
+
+        assert!(error.contains("snapshot ID prefix is too short"));
+        assert!(error.contains("minimum is 6"));
     }
 
     fn create_test_root(label: &str) -> PathBuf {

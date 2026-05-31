@@ -657,7 +657,7 @@ Improve human recovery ergonomics:
 
 - show timestamp, path, list number, and a 12-character snapshot ID prefix in human tables;
 - keep full snapshot IDs available in `--json`, Markdown detail pages, logs, and MCP structured output;
-- let `restore` and `show` accept either a full snapshot ID or a unique snapshot ID prefix;
+- let `restore`, `show`, and `diff` accept either a full snapshot ID or a unique snapshot ID prefix of at least 6 characters;
 - if a prefix is ambiguous, fail with a clear message and suggest longer matching prefixes;
 - keep `restore --project-root <path> --recent <index>` as the fastest fresh-list recovery path.
 
@@ -673,7 +673,7 @@ A user can browse and recover snapshots without knowing exact snapshot IDs.
 - Filtering by file and time range works.
 - Query commands support `--json`.
 - Human tables use compact ID prefixes without making those prefixes dead-end values.
-- `show` and `restore` accept unique snapshot ID prefixes and report ambiguity clearly.
+- `show`, `diff`, and `restore` accept unique snapshot ID prefixes of at least 6 characters and report ambiguity clearly.
 - Interactive browse mode supports page navigation.
 - Interactive browse mode supports selecting a snapshot.
 - Interactive restore asks for confirmation.
@@ -1339,8 +1339,8 @@ Because the sidecar is editor-independent, support can be added for:
 - [x] `recent --limit 10` works.
 - [x] Recent list is numbered.
 - [x] Restore by snapshot ID works.
-- [x] Restore/show by unique snapshot ID prefix works.
-- [x] Unified text diff by unique snapshot ID prefix works.
+- [x] Restore/show by full snapshot ID or unique snapshot ID prefix of at least 6 characters works.
+- [x] Unified text diff by full snapshot ID or unique snapshot ID prefix of at least 6 characters works.
 - [x] Restore by recent-list number works.
 - [x] Pagination works.
 - [x] Filters by file/time work.
