@@ -2,6 +2,10 @@
 
 Chronological log of meaningful repo decisions. **Newest sections first:** add each new `## YYYY-MM-DD` block right below this paragraph, not at the end of the file.
 
+## 2026-05-31
+
+- Release workflow: replaced retired `macos-13` runner with `macos-15-intel` for macOS x86_64 builds. GitHub removed macOS 13 hosted runners in December 2025; jobs on `macos-13` wait indefinitely in queue.
+
 ## 2026-05-30
 
 - Added README Contributing section: points to the full `agents/` doc set, documents CI commands, requires walking through `agents/FINALIZE.md` before submit, and separates runtime `llms.txt` from contributor guides.
