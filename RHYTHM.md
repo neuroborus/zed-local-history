@@ -4,6 +4,7 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-31
 
+- Pull-request CI now runs `cargo run -p xtask -- zed-ci` in a parallel `zed-extension` job (`wasm32-wasip2` toolchain) so extension changes are validated on every PR, not only locally. Release workflow bumps GitHub Actions to current majors (`actions/checkout@v6`, `actions/upload-artifact@v7`, `actions/download-artifact@v8`, `softprops/action-gh-release@v3`).
 - Zed MCP PATH lookup on Windows: `resolve_lookup_binary_path` uses `zed::current_platform()` host `Os` (`where` on Windows, `command -v` via `sh` on Unix) instead of `cfg!(windows)`; failed PATH resolution falls back to cached/downloaded MCP while keeping version compatibility checks on PATH binaries.
 - Unified diff hardening in `local-history-core`: line tokenization keeps trailing-newline state so `v1\n` vs `v1` is not reported as unchanged; common prefix/suffix trimming, a 1M-cell LCS cap, and replace-block fallback avoid quadratic memory on large CLI/MCP diffs.
 - MCP recent-list presentation modes: `local_history_recent_snapshots` now defaults to `presentation=rich` (timestamp, path, id, one-line content preview in the text summary Zed shows agents), with `index` and `ids_only` for compact output; `llms.txt` and MCP `SERVER_INSTRUCTIONS` document the contract.
