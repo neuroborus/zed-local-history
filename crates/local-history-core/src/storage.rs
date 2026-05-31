@@ -12,10 +12,10 @@ use crate::hashing::sha256_hex;
 use crate::identity::{normalize_project_root, project_id_for_root};
 use crate::layout::{default_data_dir, StorageLayout};
 use crate::model::{
-    segment_label, CompressionKind, ContentBlobRecord, ContentHash, GeneratedMarkdownViewEntry,
-    HourBucket, HourHistory, ProjectId, ProjectRecord, PruneReport, RestoreOperationRecord,
-    RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId, SnapshotKind, SnapshotRecord,
-    TimeSegment, TrackedFileRecord, WindowedFileHistory,
+    segment_label, snapshot_id_display_prefix, CompressionKind, ContentBlobRecord, ContentHash,
+    GeneratedMarkdownViewEntry, HourBucket, HourHistory, ProjectId, ProjectRecord, PruneReport,
+    RestoreOperationRecord, RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId,
+    SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord, WindowedFileHistory,
 };
 
 const SCHEMA_SQL: &str = r#"
@@ -2255,7 +2255,7 @@ fn component_to_string(component: Component<'_>) -> String {
 }
 
 fn short_id(value: &str) -> &str {
-    &value[..std::cmp::min(value.len(), 8)]
+    snapshot_id_display_prefix(value)
 }
 
 fn open_read_only_connection(database_path: &Path) -> Result<Connection, StorageError> {
@@ -3150,6 +3150,7 @@ mod tests {
             .expect("snapshot dir entries must read");
         let snapshot_page = fs::read_to_string(snapshot_pages[0].path())
             .expect("snapshot markdown page must be readable");
+        let snapshot_page_file_name = snapshot_pages[0].file_name().to_string_lossy().into_owned();
         let generated_entries: i64 = store
             .connection
             .query_row(
@@ -3184,6 +3185,9 @@ mod tests {
             segment_markdown.contains(&format!("local-history restore {}", snapshot.id.as_str()))
         );
         assert!(segment_markdown.contains(&markdown_link_target(&snapshot_pages[0].path())));
+        assert!(segment_markdown.contains(snapshot.id.display_prefix()));
+        assert!(snapshot_page_file_name.contains(snapshot.id.display_prefix()));
+        assert_eq!(snapshot.id.display_prefix().len(), 12);
         assert!(snapshot_page.contains(snapshot.id.as_str()));
         assert!(snapshot_page.contains(&format!("local-history restore {}", snapshot.id.as_str())));
         assert!(snapshot_page.contains("println!(\"alpha\");"));

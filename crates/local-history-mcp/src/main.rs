@@ -5,9 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use local_history_core::{
     default_data_dir, format_timestamp_local, init_local_offset_detection, normalize_project_root,
-    project_id_for_root, snapshot_to_current_unified_diff, LocalHistoryStore, RestoreOutcome,
-    RetentionPolicy, SnapshotId, SnapshotKind, SnapshotPage, SnapshotQuery, SnapshotRecord,
-    SnapshotWriteRequest, StorageLayout,
+    project_id_for_root, snapshot_id_display_prefix, snapshot_to_current_unified_diff,
+    LocalHistoryStore, RestoreOutcome, RetentionPolicy, SnapshotId, SnapshotKind, SnapshotPage,
+    SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -1192,7 +1192,7 @@ fn current_timestamp() -> Result<String, String> {
 }
 
 fn short_id(value: &str) -> &str {
-    &value[..std::cmp::min(value.len(), 8)]
+    snapshot_id_display_prefix(value)
 }
 
 fn current_unix_seconds() -> u64 {
@@ -1529,7 +1529,9 @@ mod tests {
         handle_message, resolve_time_filters, tool_call_result, AGENT_GUIDE_URI,
         MAX_MCP_CONTENT_DIFF_CHARS, MCP_PROTOCOL_VERSION,
     };
-    use local_history_core::{LocalHistoryStore, SnapshotKind, SnapshotWriteRequest};
+    use local_history_core::{
+        snapshot_id_display_prefix, LocalHistoryStore, SnapshotKind, SnapshotWriteRequest,
+    };
     use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1779,6 +1781,15 @@ mod tests {
             .as_str()
             .expect("summary text must be present")
             .contains("content:"));
+        let snapshot_id = recent_result["snapshots"][0]["id"]
+            .as_str()
+            .expect("snapshot id must be present");
+        let displayed_id = snapshot_id_display_prefix(snapshot_id);
+        assert!(recent_response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("summary text must be present")
+            .contains(displayed_id));
+        assert_eq!(displayed_id.len(), 12);
 
         let ids_only_response = handle_message(json!({
             "jsonrpc": "2.0",

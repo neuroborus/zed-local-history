@@ -6,16 +6,16 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 use local_history_core::{
     default_data_dir, format_timestamp_local, init_local_offset_detection, normalize_project_root,
-    project_id_for_root, segment_label, snapshot_to_current_unified_diff, HourBucket, HourHistory,
-    LocalHistoryStore, PruneReport, RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId,
-    SnapshotKind, SnapshotPage, SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout,
-    TimeSegment, WindowedFileHistory,
+    project_id_for_root, segment_label, snapshot_id_display_prefix,
+    snapshot_to_current_unified_diff, HourBucket, HourHistory, LocalHistoryStore, PruneReport,
+    RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId, SnapshotKind, SnapshotPage,
+    SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout, TimeSegment,
+    WindowedFileHistory,
 };
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 
-const DISPLAY_SNAPSHOT_ID_PREFIX_LEN: usize = 12;
 const AMBIGUOUS_SNAPSHOT_ID_SUGGESTION_LIMIT: usize = 10;
 
 #[derive(Debug, Parser)]
@@ -546,7 +546,7 @@ fn print_segment_history_text(history: &SegmentHistory) {
             println!(
                 "  {}  {}",
                 format_timestamp_local(&snapshot.timestamp),
-                short_id(snapshot.id.as_str())
+                snapshot_id_display_prefix(snapshot.id.as_str())
             );
         }
     }
@@ -1093,14 +1093,10 @@ fn format_recent_line(index: usize, snapshot: &SnapshotRecord) -> String {
         "[{index}] {}  {:<40}  {}{}{}",
         format_timestamp_local(&snapshot.timestamp),
         snapshot.relative_path.display(),
-        short_id(snapshot.id.as_str()),
+        snapshot_id_display_prefix(snapshot.id.as_str()),
         kind_suffix,
         missing_suffix
     )
-}
-
-fn short_id(value: &str) -> &str {
-    &value[..std::cmp::min(value.len(), DISPLAY_SNAPSHOT_ID_PREFIX_LEN)]
 }
 
 fn render_preview(contents: &[u8]) -> String {
@@ -1304,11 +1300,14 @@ fn confirm(label: &str) -> Result<bool, String> {
 mod tests {
     use super::{
         ambiguous_snapshot_prefix_error, format_recent_line, render_preview,
-        render_snapshot_preview, resolve_time_filters, short_id, Cli, Commands, HistoryCommands,
+        render_snapshot_preview, resolve_time_filters, Cli, Commands, HistoryCommands,
         RenderMarkdownCommands, SnapshotFilterArgs,
     };
     use clap::Parser;
-    use local_history_core::{ContentHash, ProjectId, SnapshotId, SnapshotKind, SnapshotRecord};
+    use local_history_core::{
+        snapshot_id_display_prefix, ContentHash, ProjectId, SnapshotId, SnapshotKind,
+        SnapshotRecord,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -1584,7 +1583,10 @@ mod tests {
 
         assert!(line.contains("1234567890ab"));
         assert!(!line.contains("1234567890abc"));
-        assert_eq!(short_id(snapshot.id.as_str()), "1234567890ab");
+        assert_eq!(
+            snapshot_id_display_prefix(snapshot.id.as_str()),
+            "1234567890ab"
+        );
     }
 
     #[test]

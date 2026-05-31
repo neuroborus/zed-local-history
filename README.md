@@ -282,7 +282,7 @@ local-history list . --page 1 --page-size 20 --file src/lib.rs --from 2026-05-03
 Important behavior:
 
 - `recent` shows raw user snapshots only;
-- human tables show compact snapshot ID prefixes, while `--json` includes full IDs;
+- human tables show 12-character snapshot ID prefixes, while `--json` includes full IDs;
 - `show` and `restore` accept a full snapshot ID or any unique snapshot ID prefix;
 - safety snapshots are intentionally excluded from normal recent numbering;
 - `list` can include filtered or paginated snapshot views;
