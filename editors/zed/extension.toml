@@ -1,7 +1,7 @@
 id = "local-history"
 name = "Local History"
 version = "0.1.0"
-description = "Thin Zed integration for the local-history sidecar"
+description = "Recover previous file saves when Git is not enough — watcher, CLI, Markdown history, and Agent MCP tools"
 authors = ["neuroborus"]
 repository = "https://github.com/neuroborus/zed-local-history"
 schema_version = 1

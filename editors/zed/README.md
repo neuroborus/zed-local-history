@@ -1,6 +1,6 @@
 # Zed Local History Extension
 
-Thin Zed integration scaffold for `zed-local-history`.
+Thin Zed extension package for `zed-local-history`.
 
 ## Why this package is thin
 
