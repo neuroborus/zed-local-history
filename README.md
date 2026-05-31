@@ -565,12 +565,16 @@ If you want to configure the MCP server manually instead, point the host at an i
 {
   "context_servers": {
     "local-history": {
+      "source": "custom",
       "command": "/absolute/path/to/local-history-mcp",
-      "args": []
+      "args": [],
+      "env": {}
     }
   }
 }
 ```
+
+Zed's user settings use the top-level custom-server `command` / `args` / `env` shape. The extension-managed path should not require this block.
 
 #### When only shell/CLI is available
 

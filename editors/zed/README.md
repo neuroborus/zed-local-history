@@ -56,9 +56,9 @@ Current behavior:
 - the extension probes `local-history-mcp --version` before Agent Panel launch and uses the same `PATH` first, cached/downloaded release asset second behavior
 - tagged releases publish `SHA256SUMS.txt` alongside the archives that the extension bootstrap relies on
 - release bootstrap currently has explicit asset mappings for macOS `x86_64` / `aarch64`, Linux `x86_64` / `aarch64`, and Windows `x86_64` / `aarch64`
-- the extension registers `local-history` as a context server and starts the resolved `local-history-mcp` binary
-- cached release binaries live under versioned paths such as `local-history-mcp-0.1.0/<asset-stem>/local-history-mcp`; the extension resolves the containing directory and launches the stable binary name with that directory prepended to `PATH`, so the manifest can avoid wildcard process execution
-- PATH/dev MCP binaries are resolved through the host OS lookup command (`command -v` on Unix, `where` on Windows); if lookup resolution fails, the extension falls back to the cached/downloaded release binary. For context-server startup, the extension returns `local-history-mcp` / `local-history-mcp.exe` plus a `PATH` override instead of returning a dynamic absolute executable path.
+- the extension registers `local-history` as a context server; `context_server_command` returns the resolved executable path to Zed because Zed otherwise reinterprets relative extension commands under the extension work directory
+- for sidecar slash commands and binary compatibility probes, the extension launches stable names (`local-history-sidecar`, `local-history-mcp`, and Windows `.exe` variants) with the resolved binary directory prepended to `PATH`, so the manifest can avoid wildcard process execution
+- PATH/dev MCP binaries are resolved through the host OS lookup command (`command -v` on Unix, `where` on Windows); if lookup resolution fails, the extension falls back to the cached/downloaded release binary. Cached release MCP paths are canonicalized under the extension work directory before being returned to Zed for context-server startup
 
 ## Extension capabilities
 
@@ -76,7 +76,7 @@ Current limitations:
 - binary bootstrap depends on GitHub release assets with stable names; sidecar/MCP bootstrap archives and `SHA256SUMS.txt` are published by the release workflow, but each extension version still needs a matching tagged release and live Agent Panel validation before store submission
 - `x86_64-unknown-linux-musl` is still not part of the extension bootstrap contract because the current platform mapping distinguishes OS and CPU architecture, not Linux libc family
 
-The current MCP server can also coexist with these slash commands through direct `context_servers` configuration if users prefer an explicit binary path.
+The current MCP server can also coexist with these slash commands through direct `context_servers` configuration. Use a distinct custom server ID such as `local-history-dev` so manual fallback does not shadow the extension-managed `local-history` server.
 
 ## Validation target
 
@@ -88,4 +88,4 @@ For full manual validation, use [agents/ZED_MANUAL_TESTING.md](../../agents/ZED_
 cargo run -p xtask -- zed-ci
 ```
 
-`zed-ci` and `full-ci` also run `cargo test` in this package (17 unit tests covering MCP spawn-path validation and release-target mapping).
+`zed-ci` and `full-ci` also run `cargo test` in this package (18 unit tests covering MCP spawn-path validation and release-target mapping).

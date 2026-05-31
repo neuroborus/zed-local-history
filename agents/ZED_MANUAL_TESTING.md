@@ -143,7 +143,7 @@ The full check covers:
 - Zed extension formatting;
 - Zed extension clippy for `wasm32-wasip2`;
 - Zed extension check for `wasm32-wasip2`;
-- Zed extension unit tests (`editors/zed`, 17 tests including MCP spawn-path validation).
+- Zed extension unit tests (`editors/zed`, 18 tests including MCP spawn-path validation).
 
 ## Zed Extension Toolchain Preflight
 
@@ -541,15 +541,17 @@ If extension-managed registration does not start the server, add this to Zed set
 ```json
 {
   "context_servers": {
-    "local-history": {
+    "local-history-dev": {
+      "source": "custom",
       "command": "/absolute/path/to/zed-local-history/target/debug/local-history-mcp",
-      "args": []
+      "args": [],
+      "env": {}
     }
   }
 }
 ```
 
-Replace the `command` path with your `$REPO/target/debug/local-history-mcp` during dev testing.
+Replace `command` with your `$REPO/target/debug/local-history-mcp` during dev testing. The fallback uses a distinct `local-history-dev` custom server ID so it does not shadow the extension-managed `local-history` server.
 
 In the Zed Agent Panel (default **Zed Agent** thread is correct here), ask:
 
@@ -718,6 +720,12 @@ or, with dev MCP on `PATH`:
 ERROR [project::context_server_store] ... context server binary `/path/to/target/debug/local-history-mcp` does not exist or is not a file
 ```
 
+or, while the project/context server store is being replaced during extension reload:
+
+```text
+ERROR [crates/project/src/context_server_store.rs:625] Failed to get context server settings
+```
+
 or during Agent turns (usually harmless):
 
 ```text
@@ -727,8 +735,10 @@ ERROR [crates/acp_thread/src/acp_thread.rs:2345] failed to get old checkpoint: o
 Interpretation:
 
 - the first error means `editors/zed/extension.toml` is missing required `capabilities` entries;
-- the second error means the extension returned a relative cached binary path; current extension code launches cached binaries through stable names with the cache directory prepended to `PATH`—reinstall the dev extension after pulling that fix;
-- the third error means the extension tried to validate or return a host absolute path from WASM; current code returns `local-history-mcp` / `local-history-mcp.exe` plus a `PATH` override after a successful `--version` probe—reinstall the dev extension after pulling that fix;
+- the second error means the extension returned a relative cached binary path; current extension code resolves cached MCP binaries before returning them to Zed—reinstall the dev extension after pulling that fix;
+- the third error means the extension returned a host absolute path before the matching dev MCP binary existed; rebuild `local-history-mcp` and reinstall the dev extension;
+- `Failed to get context server settings` immediately after `extensions updated` usually means Zed dropped the old context-server store while reloading the extension; treat it as secondary and look for the following concrete error (`failed to execute`, `No such file`, `Context server request timeout`, etc.);
+- for manual fallback, avoid adding a custom server with the same `local-history` ID while the extension is installed; use a distinct ID such as `local-history-dev`;
 - `failed to get old checkpoint: oneshot canceled` is Zed Agent Panel internal checkpoint noise when sending a prompt; it is **not** a local-history MCP failure if the thread continues with `Thread::send`;
 - installing the dev extension does **not** add `local-history-sidecar` to the shell `PATH`; use Agent MCP tools or release CLI on `PATH`, not `local_history_status` as a shell command;
 - enable the server in **Agent Settings** (`agent: open settings`), not via `@` mentions in the chat input.
@@ -764,7 +774,8 @@ Expected:
 | `+` menu has no **New Text Thread** | Zed 1.4.4 UI may omit text threads | sidecar CLI + MCP; optional `agent.default_view` |
 | MCP agent does nothing | no model selected or MCP not configured | pick a model; verify `context_servers` / extension MCP bootstrap |
 | **Local History** MCP toggle off / won't enable | missing `capabilities` in extension manifest or stale dev extension WASM | reinstall dev extension after `zed-ci`; see [MCP toggle troubleshooting](#troubleshooting-mcp-toggle--context-server-startup-2026-05-31) |
-| MCP toggle off after dev MCP on PATH | stale extension still returning dynamic host paths instead of stable command + `PATH` override | pull latest extension; reinstall dev extension; relaunch Zed |
+| `Failed to get context server settings` immediately after extension reload | Zed dropped an old context-server store during reload | check the next concrete error line; by itself this line is secondary |
+| MCP toggle off after dev MCP on PATH | stale extension still returning a command name that Zed resolves inside the extension directory | pull latest extension; reinstall dev extension; relaunch Zed |
 | Tool list shows only timestamps/hashes | stale MCP binary or agent skipped `presentation=rich` | `cargo build -p local-history-mcp`; relaunch with `target/debug` in PATH; check tool output for `content:` lines |
 | Agent ignores `ids_only` request | model did not pass `presentation: "ids_only"` | repeat prompt explicitly; verify tool args in Agent tool UI |
 | `failed to get old checkpoint: oneshot canceled` | Zed ACP thread checkpoint race | ignore if Agent continues; unrelated to local-history |

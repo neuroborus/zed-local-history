@@ -153,7 +153,7 @@ impl zed::Extension for LocalHistoryExtension {
         let binary = resolve_mcp_binary()?;
         let env = binary.env(zed::current_platform().0, Vec::<(String, String)>::new());
         Ok(zed::Command {
-            command: binary.command,
+            command: binary.display_path,
             args: Vec::new(),
             env,
         })
@@ -1144,6 +1144,30 @@ mod tests {
                 "PATH".to_string(),
                 "/tmp/local-history-cache:/usr/bin".to_string()
             )]
+        );
+    }
+
+    #[test]
+    fn context_server_command_uses_resolved_binary_path() {
+        let binary = BinaryCommand::from_path(
+            Os::Linux,
+            "/tmp/local-history-cache/local-history-mcp",
+            "local-history-mcp",
+        );
+        let env = binary.env(Os::Linux, Vec::<(String, String)>::new());
+        let command = zed_extension_api::Command {
+            command: binary.display_path,
+            args: Vec::new(),
+            env,
+        };
+
+        assert_eq!(
+            command.command,
+            "/tmp/local-history-cache/local-history-mcp"
+        );
+        assert_eq!(
+            command.env,
+            vec![("PATH".to_string(), "/tmp/local-history-cache".to_string())]
         );
     }
 
