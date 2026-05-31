@@ -69,6 +69,22 @@ Map intent before guessing from command names. Same mapping applies in other lan
 
 **Change-summary flow** (when Git is not the right tool): `project_root` → recent snapshots (optionally filtered by file) → `diff` newest relevant snapshot vs live file → summarize in plain language. Do not answer "what changed" from memory or the live file alone if snapshots exist.
 
+### Presenting snapshots to users
+
+By default, give **meaningful answers**: enough context for the user to understand what each snapshot contains or how it relates to the live file.
+
+When listing or summarizing history, enrich `recent` results with substance from follow-up tools when useful:
+
+1. **List requests** — add a short preview or one-line paraphrase per snapshot via `local_history_view_snapshot` (top entries, or all when the list is small).
+2. **Change history / what changed** — use `local_history_diff_snapshot` on the newest relevant snapshot vs the live file, then summarize in plain language.
+3. **Single file** — pass `relative_path` to `recent`, then `view` or `diff` on the best match.
+4. Mention the **previous-state model** when it helps: a snapshot stores the content **before** that save (not the newly typed text).
+5. Prefer: local time, relative path, short ID prefix, preview or change summary, and whether it differs from the live file now.
+
+If the user explicitly asks for a **compact index**, **IDs only**, **raw tool output**, or **machine-readable JSON**, match that request instead.
+
+Russian intents like «список версий», «что изменилось», «история правок» usually want previews or change summaries, not timestamps and hashes alone.
+
 ### MCP ↔ CLI mapping
 
 | Goal | MCP tool | CLI command |
@@ -89,7 +105,7 @@ MCP tools: `local_history_guide`, `local_history_status`, `local_history_create_
 MCP notes:
 
 - Most tools require explicit absolute `project_root`; `data_dir` is optional and normally omitted.
-- `local_history_recent_snapshots` returns raw snapshots by default; set `include_safety` only when needed.
+- `local_history_recent_snapshots` default `presentation=rich` puts timestamp, path, id, and a one-line content preview in the MCP text summary (what Zed shows the agent). Use `presentation=ids_only` for ID-only tables; `presentation=index` for timestamp/path/id without previews. Set `include_safety` only when needed. Use `view` / `diff` for full previews or unified diffs vs the live file.
 - `local_history_diff_snapshot` direction is snapshot → current live file; sets `unchanged` when they match.
 - MCP does not expose undo, interactive browse prompts, or watcher start beyond CLI sidecar.
 

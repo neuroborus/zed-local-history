@@ -138,11 +138,12 @@ The full check covers:
 
 - native formatting;
 - native clippy with warnings denied;
-- native workspace tests;
+- native workspace tests (including MCP stdio smoke in `crates/local-history-mcp/tests/stdio_smoke.rs`);
 - native workspace build;
 - Zed extension formatting;
 - Zed extension clippy for `wasm32-wasip2`;
-- Zed extension check for `wasm32-wasip2`.
+- Zed extension check for `wasm32-wasip2`;
+- Zed extension unit tests (`editors/zed`, 17 tests including MCP spawn-path validation).
 
 ## Zed Extension Toolchain Preflight
 
@@ -582,6 +583,51 @@ Expected:
 - the answer summarizes snapshot-to-current differences;
 - the Agent does not answer from the live file alone when snapshots exist.
 
+### MCP presentation modes (`local_history_recent_snapshots`)
+
+Zed shows agents the MCP tool `content[0].text` summary, not the full JSON. The tool accepts optional `presentation`:
+
+| Value | Use when | Agent-visible summary |
+|-------|----------|------------------------|
+| `rich` (default) | list/history questions | timestamp, path, id, one-line `content:` preview |
+| `index` | compact index without previews | timestamp, path, id only |
+| `ids_only` | user asks for IDs only | markdown table of snapshot ID prefixes |
+
+**Prompt — rich list (default):**
+
+```text
+Покажи последние local-history snapshots для /tmp/lh-zed-manual
+```
+
+Expected in tool output: lines with `content: ...` previews; mention previous-state model when helpful.
+
+**Prompt — IDs only:**
+
+```text
+Только snapshot ID для /tmp/lh-zed-manual, компактная таблица
+```
+
+Expected: Agent passes `presentation: "ids_only"`; tool text is a table without timestamps or `content:` lines.
+
+**Prompt — change summary:**
+
+```text
+Что изменилось в note.txt в /tmp/lh-zed-manual? Git не используй.
+```
+
+Expected: recent (rich or index) → `local_history_diff_snapshot` or view → plain-language summary.
+
+After changing MCP or extension code, rebuild and relaunch:
+
+```bash
+cargo build -p local-history-mcp
+pkill -x zed
+RUSTUP_TOOLCHAIN=stable PATH="$HOME/.cargo/bin:$REPO/target/debug:$PATH" \
+  zed --foreground "$TEST_PROJECT"
+```
+
+Reinstall or reload the dev extension, then toggle **Local History** off and on in Agent Settings.
+
 ## Troubleshooting The 2026-05-30 First Manual Run
 
 Observed log:
@@ -645,10 +691,24 @@ or, after capabilities are declared:
 ERROR [project::context_server_store] ... failed to execute `local-history-mcp-0.1.0/.../local-history-mcp --version`: No such file or directory (os error 2)
 ```
 
+or, with dev MCP on `PATH`:
+
+```text
+ERROR [project::context_server_store] ... context server binary `/path/to/target/debug/local-history-mcp` does not exist or is not a file
+```
+
+or during Agent turns (usually harmless):
+
+```text
+ERROR [crates/acp_thread/src/acp_thread.rs:2345] failed to get old checkpoint: oneshot canceled
+```
+
 Interpretation:
 
 - the first error means `editors/zed/extension.toml` is missing required `capabilities` entries;
 - the second error means the extension returned a relative cached binary path; current extension code canonicalizes cached paths before execution—reinstall the dev extension after pulling that fix;
+- the third error means the extension tried to `fs::metadata` a host absolute path from WASM; current code only validates path shape and trusts the prior `--version` probe—reinstall the dev extension after pulling that fix;
+- `failed to get old checkpoint: oneshot canceled` is Zed Agent Panel internal checkpoint noise when sending a prompt; it is **not** a local-history MCP failure if the thread continues with `Thread::send`;
 - installing the dev extension does **not** add `local-history-sidecar` to the shell `PATH`; use Agent MCP tools or release CLI on `PATH`, not `local_history_status` as a shell command;
 - enable the server in **Agent Settings** (`agent: open settings`), not via `@` mentions in the chat input.
 
@@ -683,6 +743,10 @@ Expected:
 | `+` menu has no **New Text Thread** | Zed 1.4.4 UI may omit text threads | sidecar CLI + MCP; optional `agent.default_view` |
 | MCP agent does nothing | no model selected or MCP not configured | pick a model; verify `context_servers` / extension MCP bootstrap |
 | **Local History** MCP toggle off / won't enable | missing `capabilities` in extension manifest or stale dev extension WASM | reinstall dev extension after `zed-ci`; see [MCP toggle troubleshooting](#troubleshooting-mcp-toggle--context-server-startup-2026-05-31) |
+| MCP toggle off after dev MCP on PATH | WASM `finalize_*` probed host binary with `fs::metadata` | pull latest extension; reinstall dev extension; relaunch Zed |
+| Tool list shows only timestamps/hashes | stale MCP binary or agent skipped `presentation=rich` | `cargo build -p local-history-mcp`; relaunch with `target/debug` in PATH; check tool output for `content:` lines |
+| Agent ignores `ids_only` request | model did not pass `presentation: "ids_only"` | repeat prompt explicitly; verify tool args in Agent tool UI |
+| `failed to get old checkpoint: oneshot canceled` | Zed ACP thread checkpoint race | ignore if Agent continues; unrelated to local-history |
 | Agent runs `local_history_status` in shell | MCP server not active; wrong agent surface | enable **Local History** in Agent Settings; use Zed Agent with MCP tools |
 | `zed is already running` after `--foreground` launch | old Zed instance still alive | `pkill -x zed`, then relaunch from shell |
 | Watcher never snapshots | watcher not started | `local-history-sidecar ensure-daemon "$TEST_PROJECT"` |

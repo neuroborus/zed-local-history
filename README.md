@@ -537,7 +537,8 @@ Current tool contract:
 - snapshot view and restore work by full `snapshot_id` or any unique snapshot ID prefix;
 - all tools accept optional `data_dir` when you want to use a non-default local-history storage base directory;
 - `local_history_restore_snapshot` remains safety-first and creates a safety snapshot before writing the live file;
-- `local_history_diff_snapshot` returns unified text diff from snapshot to the current live file for the same snapshot ID or unique prefix accepted by view/restore, plus `unchanged` when the live file matches the snapshot.
+- `local_history_diff_snapshot` returns unified text diff from snapshot to the current live file for the same snapshot ID or unique prefix accepted by view/restore, plus `unchanged` when the live file matches the snapshot;
+- `local_history_recent_snapshots` accepts optional `presentation`: `rich` (default, includes one-line content preview in the text summary many hosts show agents), `index` (timestamp/path/id only), or `ids_only` (markdown table of ID prefixes only). See [llms.txt](llms.txt) for agent routing.
 
 ### Agent usage
 

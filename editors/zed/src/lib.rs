@@ -151,7 +151,7 @@ impl zed::Extension for LocalHistoryExtension {
         }
 
         Ok(zed::Command {
-            command: resolve_mcp_binary()?,
+            command: finalize_context_server_spawn_path(resolve_mcp_binary()?)?,
             args: Vec::new(),
             env: Vec::new(),
         })
@@ -270,7 +270,7 @@ fn resolve_mcp_binary() -> Result<String, String> {
 
     if let Some(path) = mcp_on_path(os) {
         if mcp_is_compatible(&path)? {
-            return Ok(path);
+            return resolve_lookup_binary_path(&path);
         }
     }
 
@@ -440,6 +440,73 @@ fn resolve_executable_path(binary: &str) -> Result<String, String> {
     fs::canonicalize(path)
         .map(|path| path.to_string_lossy().into_owned())
         .map_err(|error| format!("failed to resolve executable path `{binary}`: {error}"))
+}
+
+fn resolve_lookup_binary_path(binary: &str) -> Result<String, String> {
+    let path = Path::new(binary);
+
+    if path.is_absolute() {
+        return Ok(binary.to_string());
+    }
+
+    if binary.contains('/') || binary.contains('\\') {
+        return resolve_executable_path(binary);
+    }
+
+    let shell_command = if cfg!(windows) {
+        format!("where {binary}")
+    } else {
+        format!("command -v {binary}")
+    };
+    let output = ProcessCommand::new("sh")
+        .args(["-c", &shell_command])
+        .output()
+        .map_err(|error| format!("failed to resolve `{binary}` on PATH: {error}"))?;
+
+    if output.status != Some(0) {
+        return Err(format!(
+            "`{binary}` was found during compatibility checks, but could not be resolved to an absolute path"
+        ));
+    }
+
+    let resolved = String::from_utf8(output.stdout)
+        .map_err(|error| format!("PATH lookup output for `{binary}` was not valid UTF-8: {error}"))?
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if resolved.is_empty() {
+        return Err(format!(
+            "`{binary}` was found during compatibility checks, but PATH lookup returned an empty path"
+        ));
+    }
+
+    Ok(resolved)
+}
+
+/// Zed spawns context servers without the extension workdir as cwd, so relative cached
+/// paths fail with ENOENT and bare lookup names depend on host PATH inheritance.
+///
+/// Do not probe absolute paths with `fs::metadata` here: the WASM host cannot see host
+/// binaries such as `target/debug/local-history-mcp` even after a successful version probe.
+fn finalize_context_server_spawn_path(path: String) -> Result<String, String> {
+    let candidate = Path::new(&path);
+
+    if candidate.is_absolute() {
+        return Ok(path);
+    }
+
+    if path.contains('/') || path.contains('\\') {
+        return Err(format!(
+            "context server command must be absolute after resolution, got relative path `{path}`"
+        ));
+    }
+
+    Err(format!(
+        "context server command must be absolute after resolution, got bare lookup name `{path}`"
+    ))
 }
 
 fn cleanup_old_installs(prefix: &str, current_install_dir: &str) -> Result<(), String> {
@@ -788,12 +855,15 @@ fn json_value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
 #[cfg(test)]
 mod tests {
     use super::{
-        extension_version, is_compatible_mcp_version, is_compatible_sidecar_version,
-        mcp_install_directory_name, mcp_release_target, parse_semver_triplet, release_tag,
-        release_target, resolve_executable_path, sidecar_install_directory_name, ReleaseTarget,
+        cached_mcp_path, extension_version, finalize_context_server_spawn_path,
+        is_compatible_mcp_version, is_compatible_sidecar_version, mcp_install_directory_name,
+        mcp_release_target, parse_semver_triplet, release_tag, release_target,
+        resolve_executable_path, sidecar_install_directory_name, ReleaseTarget,
     };
     use std::path::Path;
     use zed_extension_api::{Architecture, DownloadedFileType, Os};
+
+    const EXTENSION_MANIFEST: &str = include_str!("../extension.toml");
 
     #[test]
     fn maps_linux_release_target() {
@@ -914,6 +984,105 @@ mod tests {
         assert!(
             !is_compatible_mcp_version("0.0.9").expect("older MCP version must be incompatible")
         );
+    }
+
+    #[test]
+    fn extension_manifest_declares_context_server_and_mcp_capabilities() {
+        assert!(
+            EXTENSION_MANIFEST.contains("[context_servers.local-history]"),
+            "extension must register the local-history MCP context server"
+        );
+        assert!(
+            EXTENSION_MANIFEST.contains(r#"command = "local-history-mcp""#),
+            "extension must declare process:exec for local-history-mcp"
+        );
+        assert!(
+            EXTENSION_MANIFEST.contains(r#"command = "*""#),
+            "extension must declare wildcard process:exec for versioned cache paths"
+        );
+        assert!(
+            EXTENSION_MANIFEST.contains("download_file")
+                && EXTENSION_MANIFEST.contains("github.com")
+                && EXTENSION_MANIFEST.contains("zed-local-history"),
+            "extension must allow GitHub release bootstrap downloads"
+        );
+    }
+
+    #[test]
+    fn finalize_rejects_unresolved_spawn_paths() {
+        assert!(finalize_context_server_spawn_path("local-history-mcp".to_string()).is_err());
+        assert!(finalize_context_server_spawn_path(
+            "local-history-mcp-0.1.0/local-history-mcp-x86_64-unknown-linux-gnu/local-history-mcp"
+                .to_string()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn finalize_accepts_absolute_paths_without_host_filesystem_probe() {
+        let path = if cfg!(windows) {
+            r"C:\Program Files\local-history-mcp.exe".to_string()
+        } else {
+            "/usr/local/bin/local-history-mcp".to_string()
+        };
+
+        assert_eq!(
+            finalize_context_server_spawn_path(path.clone())
+                .expect("absolute path must pass without WASM-visible file probe"),
+            path
+        );
+    }
+
+    #[test]
+    fn finalize_accepts_existing_absolute_paths() {
+        let base = std::env::temp_dir().join(format!(
+            "local-history-zed-spawn-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&base).expect("temp dir must be creatable");
+        let binary = base.join("local-history-mcp");
+        std::fs::write(&binary, b"").expect("placeholder binary must be writable");
+
+        let resolved = finalize_context_server_spawn_path(binary.to_string_lossy().into_owned())
+            .expect("absolute existing binary must pass spawn validation");
+
+        assert!(Path::new(&resolved).is_absolute());
+        assert!(Path::new(&resolved).exists());
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn cached_mcp_path_resolves_to_spawn_ready_absolute_path() {
+        let target = mcp_release_target(Os::Linux, Architecture::X8664)
+            .expect("linux MCP target must exist");
+        let base = std::env::temp_dir().join(format!(
+            "local-history-zed-cache-test-{}",
+            std::process::id()
+        ));
+        let nested = base.join(format!(
+            "{}/{}",
+            mcp_install_directory_name(),
+            target.asset_stem
+        ));
+        std::fs::create_dir_all(&nested).expect("nested cache dir must be creatable");
+        let binary = nested.join(target.binary_name);
+        std::fs::write(&binary, b"").expect("placeholder binary must be writable");
+
+        let previous_dir = std::env::current_dir().expect("current dir must be readable");
+        std::env::set_current_dir(&base).expect("test must chdir into temp cache root");
+
+        let relative = cached_mcp_path(target);
+        let resolved =
+            resolve_executable_path(&relative).expect("relative cache path must resolve");
+        let spawn_path = finalize_context_server_spawn_path(resolved)
+            .expect("resolved cache path must be spawn-ready");
+
+        assert!(Path::new(&spawn_path).is_absolute());
+        assert!(Path::new(&spawn_path).exists());
+
+        std::env::set_current_dir(previous_dir).expect("test must restore previous dir");
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
