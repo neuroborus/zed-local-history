@@ -247,7 +247,8 @@ Current watcher behavior:
 - polling is used instead of OS-native event subscriptions;
 - unchanged contents do not create duplicate snapshots;
 - atomic replace save patterns are handled;
-- files larger than the snapshot size cap are skipped instead of repeatedly failing the watcher loop.
+- files larger than the snapshot size cap are skipped instead of repeatedly failing the watcher loop;
+- skipped oversized snapshots are reported in watcher status as `skipped_snapshot_count` and `last_skipped_snapshot`.
 
 ### 2. Capture a manual snapshot
 
@@ -729,6 +730,7 @@ Delete all history by removing the whole base `local-history` directory.
 
 - confirm you are saving to disk, not only changing in-memory buffers;
 - confirm the path is not ignored;
+- if the file is larger than the retention cap, inspect `skipped_snapshot_count` and `last_skipped_snapshot` in `local-history-sidecar status <project-root>`;
 - remember that the watcher is polling-based, not event-driven.
 
 ### Storage too large

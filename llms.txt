@@ -21,7 +21,7 @@ Data lives **outside** the user repository (default: `~/.local/share/local-histo
 
 Project IDs are opaque hashes derived from the canonical project root; do not expect project names in IDs.
 
-**Previous-state model:** when a file changes from `v1` to `v2`, local history stores a snapshot of `v1` (what existed before the save). The watcher seeds current state on start without snapshotting everything immediately. Deletes store the last known contents before removal. Ignored paths (`.git/`, `node_modules/`, `target/`, secrets, etc.) and oversized files are skipped.
+**Previous-state model:** when a file changes from `v1` to `v2`, local history stores a snapshot of `v1` (what existed before the save). The watcher seeds current state on start without snapshotting everything immediately. Deletes store the last known contents before removal. Ignored paths (`.git/`, `node_modules/`, `target/`, secrets, etc.) and oversized files are skipped; watcher status reports oversized skips through `skipped_snapshot_count` and `last_skipped_snapshot`.
 
 Human CLI/MCP output shows timestamps in the local system timezone with an explicit suffix such as `UTC` or `+02:00`. `--json` and MCP structured fields keep canonical RFC3339 UTC.
 

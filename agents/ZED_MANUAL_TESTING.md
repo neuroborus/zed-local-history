@@ -351,6 +351,27 @@ Expected:
 - snapshots exist for `note.txt`;
 - at least one snapshot contains an older saved state, such as `v1` or `v2`.
 
+## Oversized Snapshot Diagnostic Test
+
+This validates that the watcher explains why a large saved file has no history.
+
+Create a file just above the default `4 MiB` snapshot cap, wait for the watcher to see it, then modify it while it remains oversized:
+
+```bash
+python3 -c 'from pathlib import Path; import os; p = Path(os.environ["TEST_PROJECT"]) / "too-large.txt"; p.write_bytes(b"a" * (4 * 1024 * 1024 + 1))'
+sleep 2
+python3 -c 'from pathlib import Path; import os; p = Path(os.environ["TEST_PROJECT"]) / "too-large.txt"; p.write_bytes(b"b" * (4 * 1024 * 1024 + 1))'
+sleep 2
+local-history-sidecar status "$TEST_PROJECT"
+```
+
+Expected:
+
+- `watcher.skipped_snapshot_count` is greater than `0`;
+- `watcher.last_skipped_snapshot.reason` is `snapshot_too_large`;
+- `watcher.last_skipped_snapshot.relative_path` is `too-large.txt`;
+- `local-history recent "$TEST_PROJECT" --file too-large.txt` has no oversized snapshot content.
+
 ## Markdown View Test
 
 ### Option A — sidecar / CLI (recommended on Zed 1.4.4)

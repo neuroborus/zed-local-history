@@ -1160,6 +1160,18 @@ Defaults should include:
 - max file size;
 - time-based pruning.
 
+### 12.1.1 Add configurable large-file policy
+
+Keep the default large-file behavior simple: files above the snapshot size cap are skipped, the watcher keeps running, and status/log diagnostics explain why no history was recorded.
+
+The next idiomatic improvement is configurable policy, not chunked storage:
+
+- allow users to configure `max_file_size_bytes`, project storage cap, snapshot count, and age limits;
+- add clear ignore/include controls for generated files, logs, dumps, media, and other paths that should not be snapshotted;
+- surface a direct diagnostic such as “file is 7.3 MiB, current snapshot limit is 4 MiB; raise the limit or ignore the path”;
+- keep whole-file compressed snapshot storage as the default because restore stays atomic and easy to reason about;
+- defer chunked storage until there is a proven large-file requirement, because chunking adds manifests, partial-restore failure modes, GC complexity, migrations, and still does not make large text diffs cheap.
+
 ### 12.2 Add prune command
 
 ```text
@@ -1513,7 +1525,7 @@ Exercise watcher behavior on real editing patterns instead of synthetic unit-tes
 
 - The watcher captures previous contents correctly.
 - Unchanged saves do not create noise.
-- Ignore and size-limit rules behave as documented.
+- Ignore and size-limit rules behave as documented, including status diagnostics for skipped oversized snapshots.
 
 ## 5. Recovery Safety Validation
 

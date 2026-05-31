@@ -4,6 +4,7 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-31
 
+- Watcher oversized-snapshot skips are now diagnosable: sidecar status JSON tracks `skipped_snapshot_count` and `last_skipped_snapshot`, the watcher log records skip metadata without file contents, and MCP status surfaces the same diagnostics in structured output and summary text.
 - Human timestamp display now includes an explicit timezone suffix: CLI/MCP human output uses the local offset for the target timestamp and prints `UTC`, `+HH:MM`, or `+HH:MM:SS`; `init_local_offset_detection()` now actually enables `time` local-offset detection, while JSON, structured MCP fields, and generated Markdown keep canonical UTC behavior.
 - Zed extension capabilities narrowed: removed wildcard `process:exec`; cached and PATH-resolved sidecar/MCP binaries now launch through stable command names with the resolved binary directory prepended to `PATH`, while the manifest keeps only local-history binary names plus narrow `sh`/`where` MCP lookup helpers.
 - Sidecar watcher daemon hardening: `watcher-status.json` is written via temp file + rename, `read_status` retries transient parse races, and `ensure_daemon` reuses a watcher when its PID is still alive even if the heartbeat is stale; status JSON now includes `process_alive`.

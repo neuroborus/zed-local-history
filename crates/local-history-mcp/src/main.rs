@@ -9,7 +9,7 @@ use local_history_core::{
     LocalHistoryStore, RestoreOutcome, RetentionPolicy, SnapshotId, SnapshotKind, SnapshotPage,
     SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
@@ -398,15 +398,16 @@ fn tool_status(arguments: &Value) -> Result<Value, String> {
         .map(|store| store.project().root.display().to_string())
         .unwrap_or_else(|| project_root.display().to_string());
 
+    let summary = status_summary(
+        &response_project_root,
+        total_snapshot_count,
+        raw_snapshot_count,
+        safety_snapshot_count,
+        &watcher,
+    );
+
     Ok(json!({
-        "summary": format!(
-            "Local history for {}: {} total snapshots ({} raw, {} safety). Watcher active: {}.",
-            response_project_root,
-            total_snapshot_count,
-            raw_snapshot_count,
-            safety_snapshot_count,
-            watcher.get("active").and_then(Value::as_bool).unwrap_or(false)
-        ),
+        "summary": summary,
         "project_id": response_project_id,
         "project_root": response_project_root,
         "data_dir": layout.project_dir.display().to_string(),
@@ -705,7 +706,45 @@ fn watcher_status(layout: &StorageLayout) -> Result<Value, String> {
         "watched_files": record.watched_files,
         "log_path": record.log_path.display().to_string(),
         "last_error": record.last_error,
+        "skipped_snapshot_count": record.skipped_snapshot_count,
+        "last_skipped_snapshot": record.last_skipped_snapshot,
     }))
+}
+
+fn status_summary(
+    project_root: &str,
+    total_snapshot_count: usize,
+    raw_snapshot_count: usize,
+    safety_snapshot_count: usize,
+    watcher: &Value,
+) -> String {
+    let watcher_active = watcher
+        .get("active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let skipped_snapshot_count = watcher
+        .get("skipped_snapshot_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut summary = format!(
+        "Local history for {project_root}: {total_snapshot_count} total snapshots ({raw_snapshot_count} raw, {safety_snapshot_count} safety). Watcher active: {watcher_active}."
+    );
+
+    if skipped_snapshot_count > 0 {
+        summary.push_str(&format!(
+            " Skipped oversized snapshots: {skipped_snapshot_count}."
+        ));
+
+        if let Some(relative_path) = watcher
+            .get("last_skipped_snapshot")
+            .and_then(|value| value.get("relative_path"))
+            .and_then(Value::as_str)
+        {
+            summary.push_str(&format!(" Last skipped path: {relative_path}."));
+        }
+    }
+
+    summary
 }
 
 fn restore_outcome_json(outcome: &RestoreOutcome, project_root: &Path, summary: &str) -> Value {
@@ -1497,7 +1536,7 @@ fn tool_local_history_prune() -> Value {
     })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct WatcherStatusRecord {
     pid: u32,
     started_at: String,
@@ -1506,6 +1545,19 @@ struct WatcherStatusRecord {
     watched_files: usize,
     log_path: PathBuf,
     last_error: Option<String>,
+    #[serde(default)]
+    skipped_snapshot_count: u64,
+    #[serde(default)]
+    last_skipped_snapshot: Option<WatcherSkippedSnapshotRecord>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct WatcherSkippedSnapshotRecord {
+    reason: String,
+    relative_path: PathBuf,
+    size_bytes: u64,
+    max_bytes: u64,
+    skipped_at: String,
 }
 
 fn print_help() {
@@ -1526,7 +1578,7 @@ Usage:
 #[cfg(test)]
 mod tests {
     use super::{
-        handle_message, resolve_time_filters, tool_call_result, AGENT_GUIDE_URI,
+        handle_message, resolve_time_filters, status_summary, tool_call_result, AGENT_GUIDE_URI,
         MAX_MCP_CONTENT_DIFF_CHARS, MCP_PROTOCOL_VERSION,
     };
     use local_history_core::{
@@ -1666,6 +1718,30 @@ mod tests {
             .as_str()
             .expect("guide content text must be present")
             .contains("Natural language intent mapping"));
+    }
+
+    #[test]
+    fn status_summary_mentions_oversized_snapshot_skips() {
+        let summary = status_summary(
+            "/tmp/project",
+            3,
+            2,
+            1,
+            &json!({
+                "active": true,
+                "skipped_snapshot_count": 2,
+                "last_skipped_snapshot": {
+                    "reason": "snapshot_too_large",
+                    "relative_path": "src/large.txt",
+                    "size_bytes": 4_194_305,
+                    "max_bytes": 4_194_304,
+                    "skipped_at": "2026-05-02T14:01:00Z"
+                }
+            }),
+        );
+
+        assert!(summary.contains("Skipped oversized snapshots: 2."));
+        assert!(summary.contains("Last skipped path: src/large.txt."));
     }
 
     #[test]

@@ -13,6 +13,7 @@ MCP stdio adapter for agent-facing local-history tools.
 - structured tool output for status, snapshot creation, recent snapshots, snapshot view, snapshot diff (including `unchanged`), restore, and prune;
 - textual tool content for hosts that primarily expose `content`: the guide returns the full markdown guide, and diff returns a bounded unified-diff excerpt while keeping the full diff in `structuredContent`;
 - read-only storage access for status, recent, view, and diff tools; mutating tools use the write/open-or-create path.
+- watcher status diagnostics, including oversized snapshot skip counts and last skipped path when the sidecar reports them.
 - human-readable snapshot summaries use the shared 12-character snapshot ID display prefix.
 - human-readable summaries with local timezone timestamp display and explicit `UTC` / `+HH:MM` suffixes; structured snapshot timestamps remain canonical UTC.
 - safety-first restore access through MCP.

@@ -61,6 +61,56 @@ struct WatcherStatusRecord {
     view_root: PathBuf,
     log_path: PathBuf,
     last_error: Option<String>,
+    #[serde(default)]
+    skipped_snapshot_count: u64,
+    #[serde(default)]
+    last_skipped_snapshot: Option<WatcherSkippedSnapshotRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct WatcherSkippedSnapshotRecord {
+    reason: String,
+    relative_path: PathBuf,
+    size_bytes: u64,
+    max_bytes: u64,
+    skipped_at: String,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ReconcileReport {
+    skipped_snapshot_count: u64,
+    last_skipped_snapshot: Option<WatcherSkippedSnapshotRecord>,
+}
+
+impl ReconcileReport {
+    fn has_skipped_snapshots(&self) -> bool {
+        self.skipped_snapshot_count > 0
+    }
+
+    fn record_snapshot_too_large(
+        &mut self,
+        relative_path: PathBuf,
+        size_bytes: u64,
+        max_bytes: u64,
+        skipped_at: String,
+    ) {
+        println!(
+            "skipped snapshot: reason=snapshot_too_large relative_path={} size_bytes={} max_bytes={} skipped_at={}",
+            relative_path.display(),
+            size_bytes,
+            max_bytes,
+            skipped_at
+        );
+
+        self.skipped_snapshot_count = self.skipped_snapshot_count.saturating_add(1);
+        self.last_skipped_snapshot = Some(WatcherSkippedSnapshotRecord {
+            reason: "snapshot_too_large".to_string(),
+            relative_path,
+            size_bytes,
+            max_bytes,
+            skipped_at,
+        });
+    }
 }
 
 pub fn health_value() -> Value {
@@ -100,6 +150,8 @@ pub fn watch(project_root: &Path) -> RuntimeResult<()> {
             view_root: store.layout().view_dir.clone(),
             log_path: log_path(store.layout()),
             last_error: None,
+            skipped_snapshot_count: 0,
+            last_skipped_snapshot: None,
         },
     )?;
 
@@ -124,10 +176,17 @@ pub fn watch(project_root: &Path) -> RuntimeResult<()> {
             }
         };
 
-        if let Err(error) = reconcile_project_state(&store, &state, &current) {
-            update_status_error(store.layout(), &project_root, Some(error.clone()))?;
-            thread::sleep(WATCH_POLL_INTERVAL);
-            continue;
+        let reconcile_report = match reconcile_project_state(&store, &state, &current) {
+            Ok(report) => report,
+            Err(error) => {
+                update_status_error(store.layout(), &project_root, Some(error.clone()))?;
+                thread::sleep(WATCH_POLL_INTERVAL);
+                continue;
+            }
+        };
+
+        if reconcile_report.has_skipped_snapshots() {
+            update_status_skipped_snapshots(store.layout(), &project_root, &reconcile_report)?;
         }
 
         state = current;
@@ -381,6 +440,8 @@ fn watcher_record_json(record: &WatcherStatusRecord, active: bool) -> Value {
         "view_root": record.view_root.display().to_string(),
         "log_path": record.log_path.display().to_string(),
         "last_error": record.last_error.clone(),
+        "skipped_snapshot_count": record.skipped_snapshot_count,
+        "last_skipped_snapshot": record.last_skipped_snapshot.clone(),
     })
 }
 
@@ -441,6 +502,23 @@ fn update_status_error(
     write_status(status_path(layout), &record)
 }
 
+fn update_status_skipped_snapshots(
+    layout: &StorageLayout,
+    project_root: &Path,
+    report: &ReconcileReport,
+) -> RuntimeResult<()> {
+    let mut record =
+        read_status(status_path(layout))?.unwrap_or_else(|| blank_status(layout, project_root));
+    record.heartbeat_at = current_timestamp()?;
+    record.heartbeat_unix_seconds = current_unix_seconds();
+    record.skipped_snapshot_count = record
+        .skipped_snapshot_count
+        .saturating_add(report.skipped_snapshot_count);
+    record.last_skipped_snapshot = report.last_skipped_snapshot.clone();
+
+    write_status(status_path(layout), &record)
+}
+
 fn blank_status(layout: &StorageLayout, project_root: &Path) -> WatcherStatusRecord {
     WatcherStatusRecord {
         project_root: project_root.to_path_buf(),
@@ -459,6 +537,8 @@ fn blank_status(layout: &StorageLayout, project_root: &Path) -> WatcherStatusRec
         view_root: layout.view_dir.clone(),
         log_path: log_path(layout),
         last_error: None,
+        skipped_snapshot_count: 0,
+        last_skipped_snapshot: None,
     }
 }
 
@@ -466,23 +546,37 @@ fn reconcile_project_state(
     store: &LocalHistoryStore,
     previous: &ProjectState,
     current: &ProjectState,
-) -> RuntimeResult<()> {
+) -> RuntimeResult<ReconcileReport> {
+    let mut report = ReconcileReport::default();
+
     for candidate in diff_project_states(previous, current) {
+        let SnapshotCandidate {
+            relative_path,
+            previous_state,
+        } = candidate;
+        let timestamp = current_timestamp()?;
+
         match store.store_snapshot(SnapshotWriteRequest {
-            relative_path: candidate.relative_path,
-            contents: candidate.previous_state.contents,
-            timestamp: current_timestamp()?,
+            relative_path: relative_path.clone(),
+            contents: previous_state.contents,
+            timestamp: timestamp.clone(),
             kind: SnapshotKind::Raw,
-            is_binary: candidate.previous_state.is_binary,
+            is_binary: previous_state.is_binary,
             captures_missing_file: false,
         }) {
             Ok(_) => {}
-            Err(StorageError::SnapshotTooLarge { .. }) => continue,
+            Err(StorageError::SnapshotTooLarge {
+                size_bytes,
+                max_bytes,
+            }) => {
+                report.record_snapshot_too_large(relative_path, size_bytes, max_bytes, timestamp);
+                continue;
+            }
             Err(error) => return Err(error.to_string()),
         }
     }
 
-    Ok(())
+    Ok(report)
 }
 
 fn diff_project_states(previous: &ProjectState, current: &ProjectState) -> Vec<SnapshotCandidate> {
@@ -777,9 +871,9 @@ mod tests {
     use super::{
         diff_project_states, read_status, reconcile_project_state, scan_project, segment_bounds_at,
         should_reuse_existing_watcher, status_is_fresh, watcher_record_json, write_status,
-        FileState, ProjectState, WatcherStatusRecord,
+        FileState, ProjectState, WatcherSkippedSnapshotRecord, WatcherStatusRecord,
     };
-    use local_history_core::{LocalHistoryStore, SnapshotKind};
+    use local_history_core::{LocalHistoryStore, RetentionPolicy, SnapshotKind};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::thread;
@@ -920,6 +1014,41 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_project_state_reports_oversized_snapshot_skips() {
+        let root = create_test_root("oversized-skip");
+        let base_dir = root.join("data");
+        let project_root = root.join("project");
+
+        fs::create_dir_all(&base_dir).expect("base dir must exist");
+        fs::create_dir_all(&project_root).expect("project dir must exist");
+
+        let store = LocalHistoryStore::open(&base_dir, &project_root).expect("store must open");
+        let max_bytes = RetentionPolicy::default().max_file_size_bytes;
+        let oversized = vec![b'x'; (max_bytes + 1) as usize];
+        let previous = state_with_file("src/large.txt", &oversized);
+        let current = state_with_file("src/large.txt", b"small now");
+
+        let report =
+            reconcile_project_state(&store, &previous, &current).expect("reconcile must succeed");
+
+        assert_eq!(report.skipped_snapshot_count, 1);
+        let skipped = report
+            .last_skipped_snapshot
+            .expect("last skipped snapshot must be recorded");
+        assert_eq!(skipped.reason, "snapshot_too_large");
+        assert_eq!(skipped.relative_path, PathBuf::from("src/large.txt"));
+        assert_eq!(skipped.size_bytes, max_bytes + 1);
+        assert_eq!(skipped.max_bytes, max_bytes);
+
+        let snapshots = store
+            .recent_raw_snapshots(10)
+            .expect("snapshot query must succeed");
+        assert!(snapshots.is_empty());
+
+        cleanup_test_project(&root);
+    }
+
+    #[test]
     fn reconcile_project_state_handles_atomic_replace_save_pattern() {
         let root = create_test_root("atomic-replace");
         let base_dir = root.join("data");
@@ -972,6 +1101,33 @@ mod tests {
         let json = watcher_record_json(&record, status_is_fresh(&record));
         assert_eq!(json["active"], false);
         assert_eq!(json["process_alive"], true);
+    }
+
+    #[test]
+    fn watcher_status_json_includes_oversized_skip_diagnostics() {
+        let mut record = watcher_status_record(super::current_unix_seconds(), std::process::id());
+        record.skipped_snapshot_count = 2;
+        record.last_skipped_snapshot = Some(WatcherSkippedSnapshotRecord {
+            reason: "snapshot_too_large".to_string(),
+            relative_path: PathBuf::from("src/large.txt"),
+            size_bytes: 4_194_305,
+            max_bytes: 4_194_304,
+            skipped_at: "2026-05-02T14:01:00Z".to_string(),
+        });
+
+        let json = watcher_record_json(&record, status_is_fresh(&record));
+
+        assert_eq!(json["skipped_snapshot_count"], 2);
+        assert_eq!(
+            json["last_skipped_snapshot"]["reason"],
+            "snapshot_too_large"
+        );
+        assert_eq!(
+            json["last_skipped_snapshot"]["relative_path"],
+            "src/large.txt"
+        );
+        assert_eq!(json["last_skipped_snapshot"]["size_bytes"], 4_194_305);
+        assert_eq!(json["last_skipped_snapshot"]["max_bytes"], 4_194_304);
     }
 
     #[test]
@@ -1142,6 +1298,8 @@ mod tests {
             view_root: PathBuf::from("/tmp/data/view"),
             log_path: PathBuf::from("/tmp/data/watcher.log"),
             last_error: None,
+            skipped_snapshot_count: 0,
+            last_skipped_snapshot: None,
         }
     }
 

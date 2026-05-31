@@ -20,6 +20,7 @@ Native process boundary for watcher runtime and Zed-facing commands.
 - Sidecar command parsing and JSON response shape.
 - Read-only status and view-root diagnostics that do not initialize storage.
 - Atomic watcher-status writes, transient status-read retry, and stale-daemon PID liveness checks.
+- Watcher diagnostics for skipped oversized snapshots through status JSON and watcher logs.
 - Runtime translation between watched filesystem state and `local-history-core` snapshots.
 
 ## Does Not Own
@@ -37,4 +38,4 @@ Native process boundary for watcher runtime and Zed-facing commands.
 
 ## Validation
 
-Sidecar tests should cover command parsing, watcher reconciliation, status freshness, atomic replace saves, deletion capture, and end-to-end watcher/restore/Markdown flows.
+Sidecar tests should cover command parsing, watcher reconciliation, status freshness, atomic replace saves, deletion capture, oversized-snapshot skip diagnostics, and end-to-end watcher/restore/Markdown flows.
