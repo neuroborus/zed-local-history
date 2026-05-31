@@ -106,7 +106,7 @@ Check whether the extension can:
 - detect OS and architecture;
 - download a file;
 - make a downloaded binary executable;
-- run a short external command;
+- run short external commands through declared, narrow `process:exec` capabilities;
 - resolve the current project/worktree root;
 - open or expose a generated Markdown file in a usable way.
 
@@ -400,7 +400,7 @@ coverage/
 *.log
 ```
 
-Support:
+Future configurable ignore support:
 
 - `.gitignore`;
 - optional `.local-history-ignore`;
@@ -466,9 +466,9 @@ Default output should be numbered:
 ```text
 Latest snapshots
 
-[1] 2026-05-02 14:18:51  src/orders/order.service.ts        abc123
-[2] 2026-05-02 14:14:28  src/history/history.mapper.ts      def456
-[3] 2026-05-02 14:11:03  src/orders/order.service.ts        ghi789
+[1] 2026-05-02 14:18:51 +02:00  src/orders/order.service.ts        abc123
+[2] 2026-05-02 14:14:28 +02:00  src/history/history.mapper.ts      def456
+[3] 2026-05-02 14:11:03 +02:00  src/orders/order.service.ts        ghi789
 ```
 
 ### 4.5 Add basic restore by snapshot ID
@@ -657,7 +657,7 @@ Improve human recovery ergonomics:
 
 - show timestamp, path, list number, and a 12-character snapshot ID prefix in human tables;
 - keep full snapshot IDs available in `--json`, Markdown detail pages, logs, and MCP structured output;
-- let `restore` and `show` accept either a full snapshot ID or a unique snapshot ID prefix;
+- let `restore`, `show`, and `diff` accept either a full snapshot ID or a unique snapshot ID prefix of at least 6 characters;
 - if a prefix is ambiguous, fail with a clear message and suggest longer matching prefixes;
 - keep `restore --project-root <path> --recent <index>` as the fastest fresh-list recovery path.
 
@@ -673,7 +673,7 @@ A user can browse and recover snapshots without knowing exact snapshot IDs.
 - Filtering by file and time range works.
 - Query commands support `--json`.
 - Human tables use compact ID prefixes without making those prefixes dead-end values.
-- `show` and `restore` accept unique snapshot ID prefixes and report ambiguity clearly.
+- `show`, `diff`, and `restore` accept unique snapshot ID prefixes of at least 6 characters and report ambiguity clearly.
 - Interactive browse mode supports page navigation.
 - Interactive browse mode supports selecting a snapshot.
 - Interactive restore asks for confirmation.
@@ -1160,6 +1160,18 @@ Defaults should include:
 - max file size;
 - time-based pruning.
 
+### 12.1.1 Add configurable large-file policy
+
+Keep the default large-file behavior simple: files above the snapshot size cap are skipped, the watcher keeps running, and status/log diagnostics explain why no history was recorded.
+
+The next idiomatic improvement is configurable policy, not chunked storage:
+
+- allow users to configure `max_file_size_bytes`, project storage cap, snapshot count, and age limits;
+- add clear ignore/include controls for generated files, logs, dumps, media, and other paths that should not be snapshotted;
+- surface a direct diagnostic such as “file is 7.3 MiB, current snapshot limit is 4 MiB; raise the limit or ignore the path”;
+- keep whole-file compressed snapshot storage as the default because restore stays atomic and easy to reason about;
+- defer chunked storage until there is a proven large-file requirement, because chunking adds manifests, partial-restore failure modes, GC complexity, migrations, and still does not make large text diffs cheap.
+
 ### 12.2 Add prune command
 
 ```text
@@ -1327,8 +1339,8 @@ Because the sidecar is editor-independent, support can be added for:
 - [x] `recent --limit 10` works.
 - [x] Recent list is numbered.
 - [x] Restore by snapshot ID works.
-- [x] Restore/show by unique snapshot ID prefix works.
-- [x] Unified text diff by unique snapshot ID prefix works.
+- [x] Restore/show by full snapshot ID or unique snapshot ID prefix of at least 6 characters works.
+- [x] Unified text diff by full snapshot ID or unique snapshot ID prefix of at least 6 characters works.
 - [x] Restore by recent-list number works.
 - [x] Pagination works.
 - [x] Filters by file/time work.
@@ -1479,13 +1491,15 @@ Validate the real Zed user path instead of only compile-time extension checks.
    - dev `PATH` binary path;
    - cached release asset path;
    - incompatible `PATH` binary fallback.
-5. Confirm the returned Markdown paths are usable in real editor workflow.
+5. Confirm `extension.toml` does not require wildcard `process:exec`.
+6. Confirm the returned Markdown paths are usable in real editor workflow.
 
 ### Acceptance
 
 - Extension can resolve or download the sidecar.
 - Slash commands execute correctly inside a real worktree.
 - Restore works through the extension path.
+- Extension process capabilities stay limited to local-history binaries and narrow lookup helpers.
 - Error messages are understandable when capabilities are missing.
 
 ## 4. Real Project Watcher Validation
@@ -1511,7 +1525,7 @@ Exercise watcher behavior on real editing patterns instead of synthetic unit-tes
 
 - The watcher captures previous contents correctly.
 - Unchanged saves do not create noise.
-- Ignore and size-limit rules behave as documented.
+- Ignore and size-limit rules behave as documented, including status diagnostics for skipped oversized snapshots.
 
 ## 5. Recovery Safety Validation
 

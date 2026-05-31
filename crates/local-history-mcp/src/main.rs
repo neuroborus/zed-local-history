@@ -5,11 +5,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use local_history_core::{
     default_data_dir, format_timestamp_local, init_local_offset_detection, normalize_project_root,
-    snapshot_to_current_unified_diff, LocalHistoryStore, RestoreOutcome, RetentionPolicy,
-    SnapshotId, SnapshotKind, SnapshotPage, SnapshotQuery, SnapshotRecord, SnapshotWriteRequest,
-    StorageLayout,
+    project_id_for_root, snapshot_id_display_prefix, snapshot_to_current_unified_diff,
+    LocalHistoryStore, RestoreOutcome, RetentionPolicy, SnapshotId, SnapshotKind, SnapshotPage,
+    SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout, SNAPSHOT_ID_LEN,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime};
@@ -19,6 +19,7 @@ const SERVER_NAME: &str = "local-history-mcp";
 const WATCHER_STALE_AFTER_SECONDS: u64 = 5;
 const AGENT_GUIDE_URI: &str = "local-history://guide";
 const AGENT_GUIDE_TEXT: &str = include_str!("../../../llms.txt");
+const MAX_MCP_CONTENT_DIFF_CHARS: usize = 20_000;
 const SERVER_INSTRUCTIONS: &str = "\
 Use these tools for filesystem-first local history recovery when the client exposes them.
 
@@ -36,12 +37,15 @@ Core rules:
 - Most tools require an explicit absolute project_root.
 - Local history stores data outside the repository; generated Markdown is only a rebuildable browsing layer.
 - Raw snapshots store the previous known file state from before a save/delete, not the newly saved content.
-- Snapshot IDs are opaque. Short prefixes are accepted only when unique.
+- Snapshot IDs are opaque. Short prefixes are accepted only when they are at least 6 characters and unique.
 - Restore is state-changing and always creates a safety snapshot first.
 - Prefer local_history_view_snapshot before restoring unless the user already chose an exact snapshot.
 - Use local_history_diff_snapshot for unified text diff from snapshot to the current live file before restore when code-level inspection is needed.
 - Report the safety_snapshot_id after restore so the user knows the recovery point.
 - Prune is state-changing and can remove old snapshots according to retention policy.
+- Default to meaningful user-facing answers: after recent snapshots, enrich with view previews and/or diff summaries when that helps the question. If the user explicitly wants a compact index, IDs only, or raw tool output, honor that instead.
+- When listing snapshots, include brief content previews or change summaries when useful; explain the pre-save previous-state model when relevant.
+- For local_history_recent_snapshots, default presentation is rich (timestamp, path, id, one-line content preview). Pass presentation=ids_only when the user wants only snapshot IDs; pass presentation=index for timestamp/path/id without previews.
 
 If you need the full operating model, call the read-only local_history_guide tool or read the MCP resource local-history://guide.";
 
@@ -281,12 +285,13 @@ fn tool_call_result(result: Result<Value, String>) -> Value {
                 .get("summary")
                 .and_then(Value::as_str)
                 .unwrap_or("local-history tool call completed");
+            let content_text = tool_content_text(&structured, summary);
 
             json!({
                 "content": [
                     {
                         "type": "text",
-                        "text": summary,
+                        "text": content_text,
                     }
                 ],
                 "structuredContent": structured,
@@ -307,41 +312,108 @@ fn tool_call_result(result: Result<Value, String>) -> Value {
     }
 }
 
+fn tool_content_text(structured: &Value, summary: &str) -> String {
+    if structured.get("uri").and_then(Value::as_str) == Some(AGENT_GUIDE_URI) {
+        if let Some(text) = structured.get("text").and_then(Value::as_str) {
+            return text.to_string();
+        }
+    }
+
+    if let Some(diff) = structured.get("diff").and_then(Value::as_str) {
+        return diff_content_text(summary, diff);
+    }
+
+    summary.to_string()
+}
+
+fn diff_content_text(summary: &str, diff: &str) -> String {
+    let (excerpt, truncated) = truncate_text(diff, MAX_MCP_CONTENT_DIFF_CHARS);
+    let mut text = format!("{summary}\n\n```diff\n{excerpt}");
+
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+
+    text.push_str("```");
+
+    if truncated {
+        text.push_str(&format!(
+            "\n\nDiff text truncated after {MAX_MCP_CONTENT_DIFF_CHARS} characters. Full diff is available in `structuredContent.diff`."
+        ));
+    }
+
+    text
+}
+
+fn truncate_text(value: &str, max_chars: usize) -> (String, bool) {
+    match value.char_indices().nth(max_chars) {
+        Some((index, _)) => (value[..index].to_string(), true),
+        None => (value.to_string(), false),
+    }
+}
+
 fn tool_status(arguments: &Value) -> Result<Value, String> {
     let project_root = required_project_root(arguments)?;
     let data_dir = data_dir_from_arguments(arguments)?;
-    let store =
-        LocalHistoryStore::open(data_dir, project_root).map_err(|error| error.to_string())?;
-    let watcher = watcher_status(store.layout())?;
+    let project_id = project_id_for_root(&project_root);
+    let layout = StorageLayout::for_project(&data_dir, project_id.as_str());
+    let store = LocalHistoryStore::open_read_only(&data_dir, &project_root)
+        .map_err(|error| error.to_string())?;
+    let layout = store
+        .as_ref()
+        .map(LocalHistoryStore::layout)
+        .unwrap_or(&layout);
+    let watcher = watcher_status(layout)?;
     let total_snapshot_count = store
-        .total_snapshot_count()
-        .map_err(|error| error.to_string())?;
+        .as_ref()
+        .map(LocalHistoryStore::total_snapshot_count)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or(0);
     let raw_snapshot_count = store
-        .raw_snapshot_count()
-        .map_err(|error| error.to_string())?;
+        .as_ref()
+        .map(LocalHistoryStore::raw_snapshot_count)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or(0);
     let safety_snapshot_count = store
-        .safety_snapshot_count()
-        .map_err(|error| error.to_string())?;
+        .as_ref()
+        .map(LocalHistoryStore::safety_snapshot_count)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or(0);
     let referenced_blob_bytes = store
-        .referenced_blob_bytes()
-        .map_err(|error| error.to_string())?;
-    let retention = store.retention_policy();
+        .as_ref()
+        .map(LocalHistoryStore::referenced_blob_bytes)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or(0);
+    let retention = RetentionPolicy::default();
+    let response_project_id = store
+        .as_ref()
+        .map(|store| store.project().id.as_str())
+        .unwrap_or(project_id.as_str());
+    let response_project_root = store
+        .as_ref()
+        .map(|store| store.project().root.display().to_string())
+        .unwrap_or_else(|| project_root.display().to_string());
+
+    let summary = status_summary(
+        &response_project_root,
+        total_snapshot_count,
+        raw_snapshot_count,
+        safety_snapshot_count,
+        &watcher,
+    );
 
     Ok(json!({
-        "summary": format!(
-            "Local history for {}: {} total snapshots ({} raw, {} safety). Watcher active: {}.",
-            store.project().root.display(),
-            total_snapshot_count,
-            raw_snapshot_count,
-            safety_snapshot_count,
-            watcher.get("active").and_then(Value::as_bool).unwrap_or(false)
-        ),
-        "project_id": store.project().id.as_str(),
-        "project_root": store.project().root.display().to_string(),
-        "data_dir": store.layout().project_dir.display().to_string(),
-        "database_path": store.layout().database_path.display().to_string(),
-        "view_root": store.layout().view_dir.display().to_string(),
-        "logs_dir": store.layout().logs_dir.display().to_string(),
+        "summary": summary,
+        "project_id": response_project_id,
+        "project_root": response_project_root,
+        "data_dir": layout.project_dir.display().to_string(),
+        "database_path": layout.database_path.display().to_string(),
+        "view_root": layout.view_dir.display().to_string(),
+        "logs_dir": layout.logs_dir.display().to_string(),
         "total_snapshot_count": total_snapshot_count,
         "raw_snapshot_count": raw_snapshot_count,
         "safety_snapshot_count": safety_snapshot_count,
@@ -386,9 +458,30 @@ fn tool_recent_snapshots(arguments: &Value) -> Result<Value, String> {
     let data_dir = data_dir_from_arguments(arguments)?;
     let limit = optional_usize(arguments, "limit")?.unwrap_or(10);
     let include_safety = optional_bool(arguments, "include_safety")?.unwrap_or(false);
-    let store =
-        LocalHistoryStore::open(data_dir, project_root).map_err(|error| error.to_string())?;
+    let presentation = optional_presentation(arguments)?.unwrap_or(RecentPresentation::Rich);
+    let store = LocalHistoryStore::open_read_only(data_dir, &project_root)
+        .map_err(|error| error.to_string())?;
     let query = snapshot_query_from_arguments(arguments, include_safety, limit)?;
+    let Some(store) = store else {
+        let project_id = project_id_for_root(&project_root);
+
+        return Ok(match query.as_ref() {
+            Some(query) => empty_recent_page_json(
+                project_id.as_str(),
+                &project_root,
+                query,
+                include_safety,
+                presentation,
+            ),
+            None => empty_recent_snapshots_json(
+                project_id.as_str(),
+                &project_root,
+                limit,
+                include_safety,
+                presentation,
+            ),
+        });
+    };
     let snapshots = if query.is_none() && !include_safety {
         store
             .recent_raw_snapshots(limit)
@@ -401,21 +494,25 @@ fn tool_recent_snapshots(arguments: &Value) -> Result<Value, String> {
         let page = store
             .query_snapshots(&query.clone().expect("query checked above"))
             .map_err(|error| error.to_string())?;
-        return Ok(recent_page_json(&store, &page, include_safety));
+        return recent_page_json(&store, &page, include_safety, presentation);
     };
 
     Ok(json!({
-        "summary": recent_summary(&snapshots, include_safety),
+        "summary": recent_summary(&store, &snapshots, include_safety, presentation)?,
         "project_id": store.project().id.as_str(),
         "project_root": store.project().root.display().to_string(),
         "limit": limit,
         "include_safety": include_safety,
-        "snapshots": snapshots.iter().map(snapshot_json).collect::<Vec<_>>(),
+        "presentation": presentation.as_str(),
+        "snapshots": snapshots
+            .iter()
+            .map(|snapshot| snapshot_json_with_presentation(&store, snapshot, presentation))
+            .collect::<Result<Vec<_>, _>>()?,
     }))
 }
 
 fn tool_view_snapshot(arguments: &Value) -> Result<Value, String> {
-    let (store, snapshot_id, snapshot) = open_snapshot_from_arguments(arguments)?;
+    let (store, snapshot_id, snapshot) = open_snapshot_from_arguments_read_only(arguments)?;
     let contents = store
         .read_snapshot_content(&snapshot_id)
         .map_err(|error| error.to_string())?;
@@ -437,7 +534,7 @@ fn tool_view_snapshot(arguments: &Value) -> Result<Value, String> {
 }
 
 fn tool_diff_snapshot(arguments: &Value) -> Result<Value, String> {
-    let (store, snapshot_id, snapshot) = open_snapshot_from_arguments(arguments)?;
+    let (store, snapshot_id, snapshot) = open_snapshot_from_arguments_read_only(arguments)?;
     let snapshot_contents = store
         .read_snapshot_content(&snapshot_id)
         .map_err(|error| error.to_string())?;
@@ -563,6 +660,16 @@ fn resolve_time_filters(
         ));
     }
 
+    if let Some(from) = from.as_deref() {
+        OffsetDateTime::parse(from, &Rfc3339)
+            .map_err(|error| format!("invalid timestamp `{from}`: {error}"))?;
+    }
+
+    if let Some(to) = to.as_deref() {
+        OffsetDateTime::parse(to, &Rfc3339)
+            .map_err(|error| format!("invalid timestamp `{to}`: {error}"))?;
+    }
+
     Ok((from.clone(), to.clone()))
 }
 
@@ -599,7 +706,45 @@ fn watcher_status(layout: &StorageLayout) -> Result<Value, String> {
         "watched_files": record.watched_files,
         "log_path": record.log_path.display().to_string(),
         "last_error": record.last_error,
+        "skipped_snapshot_count": record.skipped_snapshot_count,
+        "last_skipped_snapshot": record.last_skipped_snapshot,
     }))
+}
+
+fn status_summary(
+    project_root: &str,
+    total_snapshot_count: usize,
+    raw_snapshot_count: usize,
+    safety_snapshot_count: usize,
+    watcher: &Value,
+) -> String {
+    let watcher_active = watcher
+        .get("active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let skipped_snapshot_count = watcher
+        .get("skipped_snapshot_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut summary = format!(
+        "Local history for {project_root}: {total_snapshot_count} total snapshots ({raw_snapshot_count} raw, {safety_snapshot_count} safety). Watcher active: {watcher_active}."
+    );
+
+    if skipped_snapshot_count > 0 {
+        summary.push_str(&format!(
+            " Skipped oversized snapshots: {skipped_snapshot_count}."
+        ));
+
+        if let Some(relative_path) = watcher
+            .get("last_skipped_snapshot")
+            .and_then(|value| value.get("relative_path"))
+            .and_then(Value::as_str)
+        {
+            summary.push_str(&format!(" Last skipped path: {relative_path}."));
+        }
+    }
+
+    summary
 }
 
 fn restore_outcome_json(outcome: &RestoreOutcome, project_root: &Path, summary: &str) -> Value {
@@ -622,55 +767,207 @@ fn restore_outcome_json(outcome: &RestoreOutcome, project_root: &Path, summary: 
     })
 }
 
-fn recent_page_json(store: &LocalHistoryStore, page: &SnapshotPage, include_safety: bool) -> Value {
-    json!({
-        "summary": recent_summary(&page.items, include_safety),
+fn recent_page_json(
+    store: &LocalHistoryStore,
+    page: &SnapshotPage,
+    include_safety: bool,
+    presentation: RecentPresentation,
+) -> Result<Value, String> {
+    Ok(json!({
+        "summary": recent_summary(store, &page.items, include_safety, presentation)?,
         "project_id": store.project().id.as_str(),
         "project_root": store.project().root.display().to_string(),
         "include_safety": include_safety,
+        "presentation": presentation.as_str(),
         "page": page.page,
         "page_size": page.page_size,
         "total_items": page.total_items,
         "total_pages": page.total_pages,
-        "snapshots": page.items.iter().map(snapshot_json).collect::<Vec<_>>(),
+        "snapshots": page
+            .items
+            .iter()
+            .map(|snapshot| snapshot_json_with_presentation(store, snapshot, presentation))
+            .collect::<Result<Vec<_>, _>>()?,
+    }))
+}
+
+fn empty_recent_snapshots_json(
+    project_id: &str,
+    project_root: &Path,
+    limit: usize,
+    include_safety: bool,
+    presentation: RecentPresentation,
+) -> Value {
+    json!({
+        "summary": "No matching snapshots were found.",
+        "project_id": project_id,
+        "project_root": project_root.display().to_string(),
+        "limit": limit,
+        "include_safety": include_safety,
+        "presentation": presentation.as_str(),
+        "snapshots": [],
     })
 }
 
-fn recent_summary(snapshots: &[SnapshotRecord], include_safety: bool) -> String {
+fn empty_recent_page_json(
+    project_id: &str,
+    project_root: &Path,
+    query: &SnapshotQuery,
+    include_safety: bool,
+    presentation: RecentPresentation,
+) -> Value {
+    let page = std::cmp::max(query.page, 1);
+    let page_size = std::cmp::max(query.page_size, 1);
+
+    json!({
+        "summary": "No matching snapshots were found.",
+        "project_id": project_id,
+        "project_root": project_root.display().to_string(),
+        "include_safety": include_safety,
+        "presentation": presentation.as_str(),
+        "page": page,
+        "page_size": page_size,
+        "total_items": 0,
+        "total_pages": 0,
+        "snapshots": [],
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecentPresentation {
+    Rich,
+    Index,
+    IdsOnly,
+}
+
+impl RecentPresentation {
+    fn from_str(value: &str) -> Result<Self, String> {
+        match value {
+            "rich" => Ok(Self::Rich),
+            "index" => Ok(Self::Index),
+            "ids_only" => Ok(Self::IdsOnly),
+            other => Err(format!(
+                "unsupported presentation `{other}`; expected rich, index, or ids_only"
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Rich => "rich",
+            Self::Index => "index",
+            Self::IdsOnly => "ids_only",
+        }
+    }
+}
+
+fn recent_summary(
+    store: &LocalHistoryStore,
+    snapshots: &[SnapshotRecord],
+    include_safety: bool,
+    presentation: RecentPresentation,
+) -> Result<String, String> {
     if snapshots.is_empty() {
-        return "No matching snapshots were found.".to_string();
+        return Ok("No matching snapshots were found.".to_string());
     }
 
-    let mut lines = vec![if include_safety {
-        "Recent snapshots:".to_string()
+    match presentation {
+        RecentPresentation::IdsOnly => {
+            let mut lines = vec!["| Snapshot ID |".to_string(), "|---|".to_string()];
+            for snapshot in snapshots {
+                lines.push(format!("| {} |", short_id(snapshot.id.as_str())));
+            }
+            Ok(lines.join("\n"))
+        }
+        RecentPresentation::Index | RecentPresentation::Rich => {
+            let mut lines = vec![if include_safety {
+                "Recent snapshots:".to_string()
+            } else {
+                "Recent raw snapshots (previous-state captures):".to_string()
+            }];
+
+            for (index, snapshot) in snapshots.iter().enumerate() {
+                let kind_suffix = if snapshot.kind == SnapshotKind::Safety {
+                    " [safety]"
+                } else {
+                    ""
+                };
+                let missing_suffix = if snapshot.captures_missing_file {
+                    " [missing]"
+                } else {
+                    ""
+                };
+
+                lines.push(format!(
+                    "{}. {} — {} — {}{}{}",
+                    index + 1,
+                    format_timestamp_local(&snapshot.timestamp),
+                    snapshot.relative_path.display(),
+                    short_id(snapshot.id.as_str()),
+                    kind_suffix,
+                    missing_suffix
+                ));
+
+                if presentation == RecentPresentation::Rich {
+                    let preview = snapshot_preview_line(store, snapshot)?;
+                    lines.push(format!("   content: {preview}"));
+                }
+            }
+
+            Ok(lines.join("\n"))
+        }
+    }
+}
+
+fn snapshot_preview_line(
+    store: &LocalHistoryStore,
+    snapshot: &SnapshotRecord,
+) -> Result<String, String> {
+    if snapshot.captures_missing_file {
+        return Ok("[missing file state]".to_string());
+    }
+
+    let contents = store
+        .read_snapshot_content(&snapshot.id)
+        .map_err(|error| error.to_string())?;
+
+    if contents.is_empty() {
+        return Ok("<empty file>".to_string());
+    }
+
+    let text = match std::str::from_utf8(&contents) {
+        Ok(text) => text,
+        Err(_) => return Ok(format!("[binary, {} bytes]", contents.len())),
+    };
+
+    let line = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("<empty file>");
+    const MAX_CHARS: usize = 100;
+
+    if line.chars().count() > MAX_CHARS {
+        Ok(format!(
+            "{}...",
+            line.chars().take(MAX_CHARS).collect::<String>()
+        ))
     } else {
-        "Recent raw snapshots:".to_string()
-    }];
+        Ok(line.to_string())
+    }
+}
 
-    for (index, snapshot) in snapshots.iter().enumerate() {
-        let kind_suffix = if snapshot.kind == SnapshotKind::Safety {
-            " [safety]"
-        } else {
-            ""
-        };
-        let missing_suffix = if snapshot.captures_missing_file {
-            " [missing]"
-        } else {
-            ""
-        };
+fn snapshot_json_with_presentation(
+    store: &LocalHistoryStore,
+    snapshot: &SnapshotRecord,
+    presentation: RecentPresentation,
+) -> Result<Value, String> {
+    let mut value = snapshot_json(snapshot);
 
-        lines.push(format!(
-            "{}. {} — {} — {}{}{}",
-            index + 1,
-            format_timestamp_local(&snapshot.timestamp),
-            snapshot.relative_path.display(),
-            short_id(snapshot.id.as_str()),
-            kind_suffix,
-            missing_suffix
-        ));
+    if presentation == RecentPresentation::Rich {
+        value["preview_line"] = json!(snapshot_preview_line(store, snapshot)?);
     }
 
-    lines.join("\n")
+    Ok(value)
 }
 
 fn retention_json(policy: &RetentionPolicy) -> Value {
@@ -819,9 +1116,10 @@ fn required_snapshot_id(
 fn resolve_snapshot_id(data_dir: &Path, input: &str) -> Result<SnapshotId, String> {
     let snapshot_id = SnapshotId::new(input);
 
-    if LocalHistoryStore::open_for_snapshot_id(data_dir, &snapshot_id)
-        .map_err(|error| error.to_string())?
-        .is_some()
+    if input.chars().count() == SNAPSHOT_ID_LEN
+        && LocalHistoryStore::open_for_snapshot_id_read_only(data_dir, &snapshot_id)
+            .map_err(|error| error.to_string())?
+            .is_some()
     {
         return Ok(snapshot_id);
     }
@@ -842,6 +1140,22 @@ fn open_snapshot_from_arguments(
     let data_dir = data_dir_from_arguments(arguments)?;
     let snapshot_id = required_snapshot_id(arguments, "snapshot_id", &data_dir)?;
     let store = LocalHistoryStore::open_for_snapshot_id(&data_dir, &snapshot_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
+    let snapshot = store
+        .snapshot(&snapshot_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
+
+    Ok((store, snapshot_id, snapshot))
+}
+
+fn open_snapshot_from_arguments_read_only(
+    arguments: &Value,
+) -> Result<(LocalHistoryStore, SnapshotId, SnapshotRecord), String> {
+    let data_dir = data_dir_from_arguments(arguments)?;
+    let snapshot_id = required_snapshot_id(arguments, "snapshot_id", &data_dir)?;
+    let store = LocalHistoryStore::open_for_snapshot_id_read_only(&data_dir, &snapshot_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
     let snapshot = store
@@ -905,6 +1219,12 @@ fn optional_usize(arguments: &Value, key: &str) -> Result<Option<usize>, String>
     }
 }
 
+fn optional_presentation(arguments: &Value) -> Result<Option<RecentPresentation>, String> {
+    optional_string(arguments, "presentation")?
+        .map(|value| RecentPresentation::from_str(value.trim()))
+        .transpose()
+}
+
 fn current_timestamp() -> Result<String, String> {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -912,7 +1232,7 @@ fn current_timestamp() -> Result<String, String> {
 }
 
 fn short_id(value: &str) -> &str {
-    &value[..std::cmp::min(value.len(), 8)]
+    snapshot_id_display_prefix(value)
 }
 
 fn current_unix_seconds() -> u64 {
@@ -1047,7 +1367,7 @@ fn tool_local_history_recent_snapshots() -> Value {
     json!({
         "name": "local_history_recent_snapshots",
         "title": "Recent Local Snapshots",
-        "description": "List recent local-history snapshots for a project. By default this returns raw snapshots only.",
+        "description": "List recent local-history snapshots for a project. Default presentation=rich returns timestamp, path, short id, and a one-line content preview in the text summary Zed shows to the agent. Use presentation=ids_only when the user wants only snapshot IDs; use presentation=index for timestamp/path/id without previews.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1062,6 +1382,11 @@ fn tool_local_history_recent_snapshots() -> Value {
                 "limit": {
                     "type": "integer",
                     "description": "Maximum number of snapshots to return. Default: 10."
+                },
+                "presentation": {
+                    "type": "string",
+                    "enum": ["rich", "index", "ids_only"],
+                    "description": "Text summary format for the agent. rich (default): timestamp, path, id, one-line content preview. index: timestamp, path, id only. ids_only: markdown table of snapshot ID prefixes only."
                 },
                 "relative_path": {
                     "type": "string",
@@ -1100,13 +1425,13 @@ fn tool_local_history_view_snapshot() -> Value {
     json!({
         "name": "local_history_view_snapshot",
         "title": "View Local Snapshot",
-        "description": "Return metadata and a preview for one snapshot by full snapshot ID or unique snapshot ID prefix.",
+        "description": "Return metadata and a preview for one snapshot by full snapshot ID or unique snapshot ID prefix of at least 6 characters.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "snapshot_id": {
                     "type": "string",
-                    "description": "Full local-history snapshot ID or unique snapshot ID prefix."
+                    "description": "Full local-history snapshot ID or unique snapshot ID prefix of at least 6 characters."
                 },
                 "data_dir": {
                     "type": "string",
@@ -1129,13 +1454,13 @@ fn tool_local_history_diff_snapshot() -> Value {
     json!({
         "name": "local_history_diff_snapshot",
         "title": "Diff Local Snapshot",
-        "description": "Return a unified text diff from one snapshot to the current live file by full snapshot ID or unique snapshot ID prefix.",
+        "description": "Return a unified text diff from one snapshot to the current live file by full snapshot ID or unique snapshot ID prefix of at least 6 characters.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "snapshot_id": {
                     "type": "string",
-                    "description": "Full local-history snapshot ID or unique snapshot ID prefix."
+                    "description": "Full local-history snapshot ID or unique snapshot ID prefix of at least 6 characters."
                 },
                 "data_dir": {
                     "type": "string",
@@ -1158,13 +1483,13 @@ fn tool_local_history_restore_snapshot() -> Value {
     json!({
         "name": "local_history_restore_snapshot",
         "title": "Restore Local Snapshot",
-        "description": "Restore one snapshot by full snapshot ID or unique snapshot ID prefix. This always creates a safety snapshot first.",
+        "description": "Restore one snapshot by full snapshot ID or unique snapshot ID prefix of at least 6 characters. This always creates a safety snapshot first.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "snapshot_id": {
                     "type": "string",
-                    "description": "Full local-history snapshot ID or unique snapshot ID prefix."
+                    "description": "Full local-history snapshot ID or unique snapshot ID prefix of at least 6 characters."
                 },
                 "data_dir": {
                     "type": "string",
@@ -1212,7 +1537,7 @@ fn tool_local_history_prune() -> Value {
     })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct WatcherStatusRecord {
     pid: u32,
     started_at: String,
@@ -1221,6 +1546,19 @@ struct WatcherStatusRecord {
     watched_files: usize,
     log_path: PathBuf,
     last_error: Option<String>,
+    #[serde(default)]
+    skipped_snapshot_count: u64,
+    #[serde(default)]
+    last_skipped_snapshot: Option<WatcherSkippedSnapshotRecord>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct WatcherSkippedSnapshotRecord {
+    reason: String,
+    relative_path: PathBuf,
+    size_bytes: u64,
+    max_bytes: u64,
+    skipped_at: String,
 }
 
 fn print_help() {
@@ -1240,8 +1578,13 @@ Usage:
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_message, AGENT_GUIDE_URI, MCP_PROTOCOL_VERSION};
-    use local_history_core::{LocalHistoryStore, SnapshotKind, SnapshotWriteRequest};
+    use super::{
+        handle_message, resolve_snapshot_id, resolve_time_filters, status_summary,
+        tool_call_result, AGENT_GUIDE_URI, MAX_MCP_CONTENT_DIFF_CHARS, MCP_PROTOCOL_VERSION,
+    };
+    use local_history_core::{
+        snapshot_id_display_prefix, LocalHistoryStore, SnapshotKind, SnapshotWriteRequest,
+    };
     use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1372,6 +1715,86 @@ mod tests {
             .as_str()
             .expect("guide text must be a string")
             .contains("Natural language intent mapping"));
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("guide content text must be present")
+            .contains("Natural language intent mapping"));
+    }
+
+    #[test]
+    fn status_summary_mentions_oversized_snapshot_skips() {
+        let summary = status_summary(
+            "/tmp/project",
+            3,
+            2,
+            1,
+            &json!({
+                "active": true,
+                "skipped_snapshot_count": 2,
+                "last_skipped_snapshot": {
+                    "reason": "snapshot_too_large",
+                    "relative_path": "src/large.txt",
+                    "size_bytes": 4_194_305,
+                    "max_bytes": 4_194_304,
+                    "skipped_at": "2026-05-02T14:01:00Z"
+                }
+            }),
+        );
+
+        assert!(summary.contains("Skipped oversized snapshots: 2."));
+        assert!(summary.contains("Last skipped path: src/large.txt."));
+    }
+
+    #[test]
+    fn status_and_recent_do_not_initialize_missing_store() {
+        let root = create_test_root("mcp-readonly-missing");
+        let base_dir = root.join("data");
+        let project_root = root.join("project");
+        fs::create_dir_all(&project_root).expect("project root must exist");
+
+        let status_response = handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "local_history_status",
+                "arguments": {
+                    "data_dir": base_dir.display().to_string(),
+                    "project_root": project_root.display().to_string()
+                }
+            }
+        }))
+        .expect("status tool must respond");
+        let status_result = &status_response["result"]["structuredContent"];
+
+        assert_eq!(status_result["total_snapshot_count"], 0);
+        assert_eq!(status_result["raw_snapshot_count"], 0);
+        assert_eq!(status_result["watcher"]["active"], false);
+
+        let recent_response = handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": {
+                "name": "local_history_recent_snapshots",
+                "arguments": {
+                    "data_dir": base_dir.display().to_string(),
+                    "project_root": project_root.display().to_string(),
+                    "limit": 10
+                }
+            }
+        }))
+        .expect("recent tool must respond");
+        let recent_result = &recent_response["result"]["structuredContent"];
+
+        assert_eq!(recent_result["snapshots"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            recent_result["summary"],
+            "No matching snapshots were found."
+        );
+        assert!(!base_dir.exists());
+
+        cleanup_test_root(&root);
     }
 
     #[test]
@@ -1426,6 +1849,47 @@ mod tests {
             "src/main.rs"
         );
         assert_eq!(recent_result["snapshots"][0]["kind"], "raw");
+        assert_eq!(recent_result["presentation"], "rich");
+        assert!(recent_result["snapshots"][0]["preview_line"]
+            .as_str()
+            .expect("rich presentation must include preview_line")
+            .contains("fn main()"));
+        assert!(recent_response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("summary text must be present")
+            .contains("content:"));
+        let snapshot_id = recent_result["snapshots"][0]["id"]
+            .as_str()
+            .expect("snapshot id must be present");
+        let displayed_id = snapshot_id_display_prefix(snapshot_id);
+        assert!(recent_response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("summary text must be present")
+            .contains(displayed_id));
+        assert_eq!(displayed_id.len(), 12);
+
+        let ids_only_response = handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {
+                "name": "local_history_recent_snapshots",
+                "arguments": {
+                    "data_dir": base_dir.display().to_string(),
+                    "project_root": project_root.display().to_string(),
+                    "limit": 10,
+                    "presentation": "ids_only"
+                }
+            }
+        }))
+        .expect("ids_only recent snapshots tool must respond");
+        let ids_only_text = ids_only_response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("ids_only summary text must be present");
+
+        assert!(ids_only_text.contains("| Snapshot ID |"));
+        assert!(!ids_only_text.contains("content:"));
+        assert!(!ids_only_text.contains(" — "));
 
         cleanup_test_root(&root);
     }
@@ -1546,8 +2010,55 @@ mod tests {
         assert_eq!(diff_result["unchanged"], false);
         assert!(diff_text.contains("-v1"));
         assert!(diff_text.contains("+v2"));
+        let content_text = diff_response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("diff content text must be present");
+        assert!(content_text.contains("```diff"));
+        assert!(content_text.contains("-v1"));
+        assert!(content_text.contains("+v2"));
 
         cleanup_test_root(&root);
+    }
+
+    #[test]
+    fn diff_tool_content_text_is_bounded() {
+        let tail_marker = "TAIL_MARKER";
+        let diff = format!(
+            "{}{}",
+            "a".repeat(MAX_MCP_CONTENT_DIFF_CHARS + 1),
+            tail_marker
+        );
+        let response = tool_call_result(Ok(json!({
+            "summary": "Large diff.",
+            "diff": diff.clone(),
+        })));
+        let content_text = response["content"][0]["text"]
+            .as_str()
+            .expect("diff content text must be present");
+
+        assert!(content_text.contains("Large diff."));
+        assert!(content_text.contains("```diff"));
+        assert!(content_text.contains("Diff text truncated"));
+        assert!(!content_text.contains(tail_marker));
+        assert_eq!(response["structuredContent"]["diff"], diff);
+    }
+
+    #[test]
+    fn rejects_invalid_direct_timestamp_filters() {
+        let error = resolve_time_filters(&Some("not-rfc3339".to_string()), &None, &None)
+            .expect_err("invalid from timestamp must fail");
+
+        assert!(error.contains("invalid timestamp"));
+        assert!(error.contains("not-rfc3339"));
+    }
+
+    #[test]
+    fn resolve_snapshot_id_rejects_too_short_prefix() {
+        let error = resolve_snapshot_id(Path::new("/tmp/local-history-test-data"), "abcde")
+            .expect_err("short prefix must fail");
+
+        assert!(error.contains("snapshot ID prefix is too short"));
+        assert!(error.contains("minimum is 6"));
     }
 
     fn create_test_root(label: &str) -> PathBuf {

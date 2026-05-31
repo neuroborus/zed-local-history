@@ -61,6 +61,7 @@ fn main() -> TaskResult<()> {
                 "warnings",
             ])?;
             run_zed_checked(&["check", "--target", "wasm32-wasip2"])?;
+            run_zed_checked(&["test"])?;
         }
         "full-ci" => {
             run_checked("cargo", &["fmt", "--all", "--check"])?;
@@ -87,6 +88,7 @@ fn main() -> TaskResult<()> {
                 "warnings",
             ])?;
             run_zed_checked(&["check", "--target", "wasm32-wasip2"])?;
+            run_zed_checked(&["test"])?;
         }
         _ => print_help(),
     }

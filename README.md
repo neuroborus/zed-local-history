@@ -73,7 +73,7 @@ local-history browse /path/to/project
 # Restore from the latest list by number.
 local-history restore --project-root /path/to/project --recent 1
 
-# Restore by full snapshot ID or any unique snapshot ID prefix.
+# Restore by full snapshot ID or a unique snapshot ID prefix of at least 6 characters.
 local-history restore <snapshot-id-or-unique-prefix>
 
 # Undo the latest restore.
@@ -247,7 +247,8 @@ Current watcher behavior:
 - polling is used instead of OS-native event subscriptions;
 - unchanged contents do not create duplicate snapshots;
 - atomic replace save patterns are handled;
-- files larger than the snapshot size cap are skipped instead of repeatedly failing the watcher loop.
+- files larger than the snapshot size cap are skipped instead of repeatedly failing the watcher loop;
+- skipped oversized snapshots are reported in watcher status as `skipped_snapshot_count` and `last_skipped_snapshot`.
 
 ### 2. Capture a manual snapshot
 
@@ -282,8 +283,8 @@ local-history list . --page 1 --page-size 20 --file src/lib.rs --from 2026-05-03
 Important behavior:
 
 - `recent` shows raw user snapshots only;
-- human tables show compact snapshot ID prefixes, while `--json` includes full IDs;
-- `show` and `restore` accept a full snapshot ID or any unique snapshot ID prefix;
+- human tables show 12-character snapshot ID prefixes, while `--json` includes full IDs;
+- `show`, `diff`, and `restore` accept a full snapshot ID or a unique snapshot ID prefix of at least 6 characters;
 - safety snapshots are intentionally excluded from normal recent numbering;
 - `list` can include filtered or paginated snapshot views;
 - `recent`, `list`, `show`, `status`, and `safety-list` support `--json`.
@@ -300,7 +301,7 @@ This resolves the owning project automatically from external storage.
 
 ### 5. Restore safely
 
-Restore by full snapshot ID or unique snapshot ID prefix:
+Restore by full snapshot ID or unique snapshot ID prefix of at least 6 characters:
 
 ```bash
 local-history restore <snapshot-id-or-unique-prefix>
@@ -478,7 +479,7 @@ local-history prune <project-root> [--json]
 
 - Storage keeps snapshot timestamps as RFC3339 UTC strings.
 - `--json` output keeps the same canonical UTC timestamps.
-- Human-readable CLI and MCP summaries convert UTC to the local system timezone for `recent`, `show`, `history`, restore messages, and similar tables.
+- Human-readable CLI and MCP summaries convert UTC to the local system timezone for `recent`, `show`, `history`, restore messages, and similar tables, and include an explicit suffix such as `UTC` or `+02:00`.
 - Generated Markdown under external `view/` still labels UTC explicitly.
 
 ## Sidecar command reference
@@ -534,10 +535,11 @@ Current tool contract:
 
 - `local_history_guide` returns the same guide text as the `local-history://guide` resource for MCP clients that expose tools more reliably than resources;
 - most tools require explicit `project_root`;
-- snapshot view and restore work by full `snapshot_id` or any unique snapshot ID prefix;
+- snapshot view and restore work by full `snapshot_id` or a unique snapshot ID prefix of at least 6 characters;
 - all tools accept optional `data_dir` when you want to use a non-default local-history storage base directory;
 - `local_history_restore_snapshot` remains safety-first and creates a safety snapshot before writing the live file;
-- `local_history_diff_snapshot` returns unified text diff from snapshot to the current live file for the same snapshot ID or unique prefix accepted by view/restore, plus `unchanged` when the live file matches the snapshot.
+- `local_history_diff_snapshot` returns unified text diff from snapshot to the current live file for the same snapshot ID or accepted unique prefix used by view/restore, plus `unchanged` when the live file matches the snapshot;
+- `local_history_recent_snapshots` accepts optional `presentation`: `rich` (default, includes one-line content preview in the text summary many hosts show agents), `index` (timestamp/path/id only), or `ids_only` (markdown table of ID prefixes only). See [llms.txt](llms.txt) for agent routing.
 
 ### Agent usage
 
@@ -563,12 +565,16 @@ If you want to configure the MCP server manually instead, point the host at an i
 {
   "context_servers": {
     "local-history": {
+      "source": "custom",
       "command": "/absolute/path/to/local-history-mcp",
-      "args": []
+      "args": [],
+      "env": {}
     }
   }
 }
 ```
+
+Zed's user settings use the top-level custom-server `command` / `args` / `env` shape. The extension-managed path should not require this block.
 
 #### When only shell/CLI is available
 
@@ -728,6 +734,7 @@ Delete all history by removing the whole base `local-history` directory.
 
 - confirm you are saving to disk, not only changing in-memory buffers;
 - confirm the path is not ignored;
+- if the file is larger than the retention cap, inspect `skipped_snapshot_count` and `last_skipped_snapshot` in `local-history-sidecar status <project-root>`;
 - remember that the watcher is polling-based, not event-driven.
 
 ### Storage too large
@@ -834,7 +841,7 @@ Contributions are welcome — issues, docs fixes, and focused pull requests.
 
 ### Before you change code
 
-Read [`agents/README.md`](agents/README.md) for the contributor doc set: product goals, working agreements, development plan, manual testing, and the post-change checklist.
+Start with [`agents/CURRENT_STATUS.md`](agents/CURRENT_STATUS.md) for the current implementation and known limits. Then read [`agents/README.md`](agents/README.md) for the full contributor doc set: working agreements, product goals, development plan, manual testing, and the post-change checklist.
 
 Keep recovery logic in `local-history-core`. The CLI, sidecar, MCP server, and Zed extension should stay thin adapters. Restore must remain safety-first (safety snapshot before writing the live file).
 

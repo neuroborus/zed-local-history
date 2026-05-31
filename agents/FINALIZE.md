@@ -104,7 +104,17 @@ cargo run -p xtask -- full-ci
 
 ---
 
-## 10. Commit preparation (do not commit)
+## 10. Independent project audit
+
+- [ ] For broad or high-risk changes, review the whole project instead of only the touched files
+- [ ] Look specifically for potential bugs, performance risks, inconsistent behavior, documentation contradictions, heterogeneous approaches, agent-context overload, and non-idiomatic code
+- [ ] Check that runtime agent guidance stays compact and does not duplicate contributor architecture docs
+- [ ] Save audit findings in a separate Markdown file, such as `agents/AUDIT_FINDINGS.md`, before starting implementation fixes
+- [ ] Record "no findings" explicitly if the audit does not identify actionable issues
+
+---
+
+## 11. Commit preparation (do not commit)
 
 - [ ] Review the final diff for scaffolding drift, temporary text, and stale bootstrap comments
 - [ ] Draft a concise commit message that matches the actual scope of the change set

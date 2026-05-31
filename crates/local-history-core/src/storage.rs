@@ -3,7 +3,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
 
-use rusqlite::{named_params, params, Connection, OptionalExtension};
+use rusqlite::{named_params, params, Connection, OpenFlags, OptionalExtension};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime, PrimitiveDateTime, UtcOffset};
 
@@ -12,10 +12,11 @@ use crate::hashing::sha256_hex;
 use crate::identity::{normalize_project_root, project_id_for_root};
 use crate::layout::{default_data_dir, StorageLayout};
 use crate::model::{
-    segment_label, CompressionKind, ContentBlobRecord, ContentHash, GeneratedMarkdownViewEntry,
-    HourBucket, HourHistory, ProjectId, ProjectRecord, PruneReport, RestoreOperationRecord,
-    RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId, SnapshotKind, SnapshotRecord,
-    TimeSegment, TrackedFileRecord, WindowedFileHistory,
+    segment_label, snapshot_id_display_prefix, CompressionKind, ContentBlobRecord, ContentHash,
+    GeneratedMarkdownViewEntry, HourBucket, HourHistory, ProjectId, ProjectRecord, PruneReport,
+    RestoreOperationRecord, RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId,
+    SnapshotKind, SnapshotRecord, TimeSegment, TrackedFileRecord, WindowedFileHistory,
+    MIN_SNAPSHOT_ID_PREFIX_LEN, SNAPSHOT_ID_LEN,
 };
 
 const SCHEMA_SQL: &str = r#"
@@ -134,6 +135,13 @@ pub struct LocalHistoryStore {
     connection: Connection,
     layout: StorageLayout,
     project: ProjectRecord,
+    access_mode: StoreAccessMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoreAccessMode {
+    ReadWrite,
+    ReadOnly,
 }
 
 #[derive(Debug, Clone)]
@@ -154,10 +162,22 @@ impl LocalHistoryStore {
         Self::open(default_data_dir(), project_root)
     }
 
+    pub fn open_default_read_only(
+        project_root: impl AsRef<Path>,
+    ) -> Result<Option<Self>, StorageError> {
+        Self::open_read_only(default_data_dir(), project_root)
+    }
+
     pub fn open_default_for_snapshot(
         snapshot_id: &SnapshotId,
     ) -> Result<Option<Self>, StorageError> {
         Self::open_for_snapshot_id(default_data_dir(), snapshot_id)
+    }
+
+    pub fn open_default_for_snapshot_read_only(
+        snapshot_id: &SnapshotId,
+    ) -> Result<Option<Self>, StorageError> {
+        Self::open_for_snapshot_id_read_only(default_data_dir(), snapshot_id)
     }
 
     pub fn find_default_snapshot_ids_by_prefix(
@@ -167,6 +187,13 @@ impl LocalHistoryStore {
     }
 
     pub fn open(
+        base_data_dir: impl AsRef<Path>,
+        project_root: impl AsRef<Path>,
+    ) -> Result<Self, StorageError> {
+        Self::open_or_create(base_data_dir, project_root)
+    }
+
+    pub fn open_or_create(
         base_data_dir: impl AsRef<Path>,
         project_root: impl AsRef<Path>,
     ) -> Result<Self, StorageError> {
@@ -198,10 +225,60 @@ impl LocalHistoryStore {
             connection,
             layout,
             project,
+            access_mode: StoreAccessMode::ReadWrite,
         })
     }
 
+    pub fn open_read_only(
+        base_data_dir: impl AsRef<Path>,
+        project_root: impl AsRef<Path>,
+    ) -> Result<Option<Self>, StorageError> {
+        let project_root = normalize_project_root(project_root.as_ref());
+        let project_id = project_id_for_root(&project_root);
+        let layout = StorageLayout::for_project(base_data_dir, project_id.as_str());
+
+        if !layout.database_path.is_file() {
+            return Ok(None);
+        }
+
+        let connection = open_read_only_connection(&layout.database_path)?;
+        ensure_readable_schema(&connection)?;
+        let stored_root: Option<String> = connection
+            .query_row(
+                "SELECT root FROM projects WHERE id = ?1",
+                params![project_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(stored_root) = stored_root else {
+            return Ok(None);
+        };
+        let project = ProjectRecord {
+            id: project_id,
+            root: PathBuf::from(stored_root),
+        };
+
+        Ok(Some(Self {
+            connection,
+            layout,
+            project,
+            access_mode: StoreAccessMode::ReadOnly,
+        }))
+    }
+
     pub fn open_for_snapshot_id(
+        base_data_dir: impl AsRef<Path>,
+        snapshot_id: &SnapshotId,
+    ) -> Result<Option<Self>, StorageError> {
+        let Some(project) = Self::project_for_snapshot_id(base_data_dir.as_ref(), snapshot_id)?
+        else {
+            return Ok(None);
+        };
+
+        Self::open(base_data_dir, project.root).map(Some)
+    }
+
+    pub fn open_for_snapshot_id_read_only(
         base_data_dir: impl AsRef<Path>,
         snapshot_id: &SnapshotId,
     ) -> Result<Option<Self>, StorageError> {
@@ -225,21 +302,34 @@ impl LocalHistoryStore {
                 continue;
             }
 
-            let connection = Connection::open(&database_path)?;
-            let project_root: Option<String> = connection
+            let connection = open_read_only_connection(&database_path)?;
+            let project: Option<ProjectRecord> = connection
                 .query_row(
-                    "SELECT projects.root
+                    "SELECT projects.id, projects.root
                      FROM snapshots
                      JOIN projects ON projects.id = snapshots.project_id
                      WHERE snapshots.id = ?1
                      LIMIT 1",
                     params![snapshot_id.as_str()],
-                    |row| row.get(0),
+                    |row| {
+                        Ok(ProjectRecord {
+                            id: ProjectId::new(row.get::<_, String>(0)?),
+                            root: PathBuf::from(row.get::<_, String>(1)?),
+                        })
+                    },
                 )
                 .optional()?;
 
-            if let Some(project_root) = project_root {
-                return Self::open(base_data_dir, project_root).map(Some);
+            if let Some(project) = project {
+                ensure_readable_schema(&connection)?;
+                let layout = StorageLayout::for_project(base_data_dir, project.id.as_str());
+
+                return Ok(Some(Self {
+                    connection,
+                    layout,
+                    project,
+                    access_mode: StoreAccessMode::ReadOnly,
+                }));
             }
         }
 
@@ -250,6 +340,19 @@ impl LocalHistoryStore {
         base_data_dir: impl AsRef<Path>,
         prefix: &str,
     ) -> Result<Vec<SnapshotId>, StorageError> {
+        let prefix_len = prefix.chars().count();
+
+        if prefix_len < MIN_SNAPSHOT_ID_PREFIX_LEN {
+            return Err(StorageError::SnapshotPrefixTooShort {
+                prefix_len,
+                min_len: MIN_SNAPSHOT_ID_PREFIX_LEN,
+            });
+        }
+
+        if prefix_len > SNAPSHOT_ID_LEN {
+            return Ok(Vec::new());
+        }
+
         let base_data_dir = base_data_dir.as_ref();
         let projects_dir = base_data_dir.join("projects");
 
@@ -272,7 +375,7 @@ impl LocalHistoryStore {
                 continue;
             }
 
-            let connection = Connection::open(&database_path)?;
+            let connection = open_read_only_connection(&database_path)?;
             let mut statement = connection.prepare(
                 "SELECT id
                  FROM snapshots
@@ -289,6 +392,55 @@ impl LocalHistoryStore {
         }
 
         Ok(matches.into_iter().map(SnapshotId::new).collect())
+    }
+
+    fn project_for_snapshot_id(
+        base_data_dir: &Path,
+        snapshot_id: &SnapshotId,
+    ) -> Result<Option<ProjectRecord>, StorageError> {
+        let projects_dir = base_data_dir.join("projects");
+
+        if !projects_dir.exists() {
+            return Ok(None);
+        }
+
+        for entry in fs::read_dir(&projects_dir)? {
+            let entry = entry?;
+
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+
+            let database_path = entry.path().join("metadata.sqlite");
+
+            if !database_path.is_file() {
+                continue;
+            }
+
+            let connection = open_read_only_connection(&database_path)?;
+            let project = connection
+                .query_row(
+                    "SELECT projects.id, projects.root
+                     FROM snapshots
+                     JOIN projects ON projects.id = snapshots.project_id
+                     WHERE snapshots.id = ?1
+                     LIMIT 1",
+                    params![snapshot_id.as_str()],
+                    |row| {
+                        Ok(ProjectRecord {
+                            id: ProjectId::new(row.get::<_, String>(0)?),
+                            root: PathBuf::from(row.get::<_, String>(1)?),
+                        })
+                    },
+                )
+                .optional()?;
+
+            if project.is_some() {
+                return Ok(project);
+            }
+        }
+
+        Ok(None)
     }
 
     pub fn project(&self) -> &ProjectRecord {
@@ -360,6 +512,13 @@ impl LocalHistoryStore {
         let relative_path_param = relative_path_string.as_deref();
         let from_timestamp = query.from_timestamp.as_deref();
         let to_timestamp = query.to_timestamp.as_deref();
+
+        if let Some(from_timestamp) = from_timestamp {
+            parse_rfc3339(from_timestamp)?;
+        }
+        if let Some(to_timestamp) = to_timestamp {
+            parse_rfc3339(to_timestamp)?;
+        }
 
         let total_items: usize = self.connection.query_row(
             "SELECT COUNT(*)
@@ -472,6 +631,8 @@ impl LocalHistoryStore {
         policy: &RetentionPolicy,
         pruned_at: &str,
     ) -> Result<PruneReport, StorageError> {
+        self.ensure_writable()?;
+
         let pruned_at = parse_rfc3339(pruned_at)?.to_offset(UtcOffset::UTC);
         let all_snapshots = self.all_snapshots_newest_first()?;
         let latest_restore_operation = self.latest_restore_operation()?;
@@ -605,6 +766,8 @@ impl LocalHistoryStore {
         hour: &str,
         generated_at: &str,
     ) -> Result<GeneratedMarkdownViewEntry, StorageError> {
+        self.ensure_writable()?;
+
         let hour_start = parse_iso_hour(hour)?;
         let entries = self.render_hour_view(hour_start, generated_at)?;
 
@@ -626,6 +789,8 @@ impl LocalHistoryStore {
         to_timestamp: &str,
         generated_at: &str,
     ) -> Result<GeneratedMarkdownViewEntry, StorageError> {
+        self.ensure_writable()?;
+
         let from = parse_rfc3339(from_timestamp)?.to_offset(UtcOffset::UTC);
         let to = parse_rfc3339(to_timestamp)?.to_offset(UtcOffset::UTC);
         validate_fixed_ten_minute_segment(from, to, from_timestamp, to_timestamp)?;
@@ -650,6 +815,8 @@ impl LocalHistoryStore {
         &self,
         generated_at: &str,
     ) -> Result<Vec<GeneratedMarkdownViewEntry>, StorageError> {
+        self.ensure_writable()?;
+
         clear_directory_if_exists(&self.layout.view_dir)?;
         fs::create_dir_all(&self.layout.view_dir)?;
         self.clear_generated_markdown_index()?;
@@ -669,6 +836,8 @@ impl LocalHistoryStore {
         &self,
         request: SnapshotWriteRequest,
     ) -> Result<SnapshotRecord, StorageError> {
+        self.ensure_writable()?;
+
         let policy = self.retention_policy();
         let size_bytes = request.contents.len() as u64;
 
@@ -766,6 +935,8 @@ impl LocalHistoryStore {
         snapshot_id: &SnapshotId,
         timestamp: &str,
     ) -> Result<RestoreOutcome, StorageError> {
+        self.ensure_writable()?;
+
         let snapshot = self
             .get_snapshot(snapshot_id)?
             .ok_or_else(|| StorageError::SnapshotNotFound(snapshot_id.as_str().to_string()))?;
@@ -795,6 +966,8 @@ impl LocalHistoryStore {
     }
 
     pub fn undo_last_restore(&self, timestamp: &str) -> Result<RestoreOutcome, StorageError> {
+        self.ensure_writable()?;
+
         let operation = self.latest_restore_operation()?.ok_or_else(|| {
             StorageError::RestoreOperationNotFound(self.project.id.as_str().to_string())
         })?;
@@ -806,6 +979,8 @@ impl LocalHistoryStore {
         &self,
         timestamp: &str,
     ) -> Result<RestoreOutcome, StorageError> {
+        self.ensure_writable()?;
+
         let snapshot = self
             .safety_snapshots(1)?
             .into_iter()
@@ -1367,6 +1542,13 @@ impl LocalHistoryStore {
             .map_err(StorageError::from)
     }
 
+    fn ensure_writable(&self) -> Result<(), StorageError> {
+        match self.access_mode {
+            StoreAccessMode::ReadWrite => Ok(()),
+            StoreAccessMode::ReadOnly => Err(StorageError::ReadOnlyStore),
+        }
+    }
+
     fn apply_snapshot(&self, snapshot: &SnapshotRecord) -> Result<PathBuf, StorageError> {
         let restore_path = self.project.root.join(&snapshot.relative_path);
 
@@ -1841,7 +2023,7 @@ fn snapshot_id(
     );
     let digest = sha256_hex(input.as_bytes());
 
-    digest[..24].to_string()
+    digest[..SNAPSHOT_ID_LEN].to_string()
 }
 
 fn restore_operation_id(
@@ -2087,7 +2269,13 @@ fn component_to_string(component: Component<'_>) -> String {
 }
 
 fn short_id(value: &str) -> &str {
-    &value[..std::cmp::min(value.len(), 8)]
+    snapshot_id_display_prefix(value)
+}
+
+fn open_read_only_connection(database_path: &Path) -> Result<Connection, StorageError> {
+    let connection = Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+    Ok(connection)
 }
 
 fn ensure_schema_compatibility(connection: &Connection) -> Result<(), StorageError> {
@@ -2108,6 +2296,50 @@ fn ensure_schema_compatibility(connection: &Connection) -> Result<(), StorageErr
     }
 
     Ok(())
+}
+
+fn ensure_readable_schema(connection: &Connection) -> Result<(), StorageError> {
+    for table_name in [
+        "projects",
+        "tracked_files",
+        "content_blobs",
+        "snapshots",
+        "restore_operations",
+        "generated_markdown_views",
+    ] {
+        if !table_exists(connection, table_name)? {
+            return Err(StorageError::IncompatibleSchema(format!(
+                "missing `{table_name}` table; open the store in write mode to initialize or migrate it"
+            )));
+        }
+    }
+
+    for (table_name, column_name) in [
+        ("snapshots", "captures_missing_file"),
+        ("restore_operations", "previous_file_existed"),
+    ] {
+        if !table_has_column(connection, table_name, column_name)? {
+            return Err(StorageError::IncompatibleSchema(format!(
+                "missing `{table_name}.{column_name}` column; open the store in write mode to migrate it"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn table_exists(connection: &Connection, table_name: &str) -> Result<bool, StorageError> {
+    connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = ?1
+             )",
+            params![table_name],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(StorageError::from)
 }
 
 fn table_has_column(
@@ -2166,7 +2398,7 @@ mod tests {
         markdown_link_target, LocalHistoryStore, SnapshotQuery, SnapshotWriteRequest, StorageError,
         SCHEMA_SQL,
     };
-    use crate::{RetentionPolicy, SnapshotId, SnapshotKind};
+    use crate::{RetentionPolicy, SnapshotId, SnapshotKind, MIN_SNAPSHOT_ID_PREFIX_LEN};
     use rusqlite::params;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -2199,6 +2431,70 @@ mod tests {
             )
             .expect("schema query must work");
         assert_eq!(table_count, 6);
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn open_read_only_does_not_initialize_missing_project() {
+        let (base_dir, project_root) = create_test_roots("readonly-missing");
+
+        let store = LocalHistoryStore::open_read_only(&base_dir, project_root)
+            .expect("read-only open must not fail for missing storage");
+
+        assert!(store.is_none());
+        assert!(!base_dir.join("projects").exists());
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn open_read_only_reads_existing_project_and_rejects_writes() {
+        let (base_dir, project_root) = create_test_roots("readonly-existing");
+        let write_store =
+            LocalHistoryStore::open(&base_dir, &project_root).expect("write store must open");
+        let snapshot = write_store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/lib.rs"),
+                contents: b"readonly snapshot\n".to_vec(),
+                timestamp: "2026-05-02T14:14:28Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect("snapshot must store");
+        drop(write_store);
+
+        let read_store = LocalHistoryStore::open_read_only(&base_dir, &project_root)
+            .expect("read-only open must succeed")
+            .expect("existing store must be found");
+        let contents = read_store
+            .read_snapshot_content(&snapshot.id)
+            .expect("read-only store must read snapshot content");
+        let error = read_store
+            .store_snapshot(SnapshotWriteRequest {
+                relative_path: PathBuf::from("src/other.rs"),
+                contents: b"write attempt\n".to_vec(),
+                timestamp: "2026-05-02T14:15:00Z".to_string(),
+                kind: SnapshotKind::Raw,
+                is_binary: false,
+                captures_missing_file: false,
+            })
+            .expect_err("read-only store must reject writes");
+
+        assert_eq!(contents, b"readonly snapshot\n");
+        assert!(matches!(error, StorageError::ReadOnlyStore));
+
+        let located = LocalHistoryStore::open_for_snapshot_id_read_only(&base_dir, &snapshot.id)
+            .expect("read-only snapshot lookup must succeed")
+            .expect("snapshot store must be found");
+        assert_eq!(located.project().id, read_store.project().id);
+        assert_eq!(
+            located
+                .read_snapshot_content(&snapshot.id)
+                .expect("located read-only store must read content"),
+            b"readonly snapshot\n"
+        );
 
         cleanup_test_roots(&base_dir);
     }
@@ -2599,6 +2895,24 @@ mod tests {
     }
 
     #[test]
+    fn query_snapshots_rejects_invalid_timestamp_bounds() {
+        let (base_dir, project_root) = create_test_roots("query-invalid-time");
+        let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
+
+        let error = store
+            .query_snapshots(&SnapshotQuery {
+                from_timestamp: Some("not-rfc3339".to_string()),
+                ..SnapshotQuery::default()
+            })
+            .expect_err("invalid from timestamp must fail");
+
+        assert!(matches!(error, StorageError::InvalidTimestamp(_)));
+        assert!(error.to_string().contains("not-rfc3339"));
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
     fn query_snapshots_supports_pagination_and_file_filter() {
         let (base_dir, project_root) = create_test_roots("query-file");
         let store = LocalHistoryStore::open(&base_dir, project_root).expect("store must open");
@@ -2850,6 +3164,7 @@ mod tests {
             .expect("snapshot dir entries must read");
         let snapshot_page = fs::read_to_string(snapshot_pages[0].path())
             .expect("snapshot markdown page must be readable");
+        let snapshot_page_file_name = snapshot_pages[0].file_name().to_string_lossy().into_owned();
         let generated_entries: i64 = store
             .connection
             .query_row(
@@ -2884,6 +3199,9 @@ mod tests {
             segment_markdown.contains(&format!("local-history restore {}", snapshot.id.as_str()))
         );
         assert!(segment_markdown.contains(&markdown_link_target(&snapshot_pages[0].path())));
+        assert!(segment_markdown.contains(snapshot.id.display_prefix()));
+        assert!(snapshot_page_file_name.contains(snapshot.id.display_prefix()));
+        assert_eq!(snapshot.id.display_prefix().len(), 12);
         assert!(snapshot_page.contains(snapshot.id.as_str()));
         assert!(snapshot_page.contains(&format!("local-history restore {}", snapshot.id.as_str())));
         assert!(snapshot_page.contains("println!(\"alpha\");"));
@@ -3038,11 +3356,32 @@ mod tests {
             .expect("prefix lookup must work");
         assert_eq!(exact_matches, vec![first_snapshot.id.clone()]);
 
-        let all_matches = LocalHistoryStore::find_snapshot_ids_by_prefix(&base_dir, "")
-            .expect("empty prefix lookup must work");
-        assert_eq!(all_matches.len(), 2);
-        assert!(all_matches.contains(&first_snapshot.id));
-        assert!(all_matches.contains(&second_snapshot.id));
+        let second_prefix = &second_snapshot.id.as_str()[..12];
+        let second_matches =
+            LocalHistoryStore::find_snapshot_ids_by_prefix(&base_dir, second_prefix)
+                .expect("prefix lookup must work");
+        assert_eq!(second_matches, vec![second_snapshot.id.clone()]);
+
+        cleanup_test_roots(&base_dir);
+    }
+
+    #[test]
+    fn rejects_snapshot_id_prefix_shorter_than_minimum() {
+        let (base_dir, _) = create_test_roots("short-prefix");
+        let short_prefix = "abcde";
+
+        assert!(short_prefix.len() < MIN_SNAPSHOT_ID_PREFIX_LEN);
+
+        let error = LocalHistoryStore::find_snapshot_ids_by_prefix(&base_dir, short_prefix)
+            .expect_err("short prefix lookup must fail before scanning projects");
+
+        assert!(matches!(
+            error,
+            StorageError::SnapshotPrefixTooShort {
+                prefix_len: 5,
+                min_len: MIN_SNAPSHOT_ID_PREFIX_LEN,
+            }
+        ));
 
         cleanup_test_roots(&base_dir);
     }

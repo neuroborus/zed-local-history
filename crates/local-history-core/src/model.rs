@@ -1,6 +1,14 @@
 use std::fmt;
 use std::path::PathBuf;
 
+pub const DISPLAY_SNAPSHOT_ID_PREFIX_LEN: usize = 12;
+pub const MIN_SNAPSHOT_ID_PREFIX_LEN: usize = 6;
+pub const SNAPSHOT_ID_LEN: usize = 24;
+
+pub fn snapshot_id_display_prefix(value: &str) -> &str {
+    &value[..std::cmp::min(value.len(), DISPLAY_SNAPSHOT_ID_PREFIX_LEN)]
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProjectId(String);
 
@@ -36,6 +44,10 @@ impl SnapshotId {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub fn display_prefix(&self) -> &str {
+        snapshot_id_display_prefix(self.as_str())
     }
 }
 

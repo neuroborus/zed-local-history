@@ -5,6 +5,8 @@ use thiserror::Error;
 
 use crate::model::SnapshotRecord;
 
+const MAX_EXACT_DIFF_CELLS: usize = 1_000_000;
+
 #[derive(Debug, Error)]
 pub enum SnapshotDiffError {
     #[error("failed to read current file {path}: {source}")]
@@ -104,19 +106,13 @@ pub(crate) fn render_unified_diff(
     old_text: &str,
     new_text: &str,
 ) -> String {
-    let old_lines = old_text.lines().collect::<Vec<_>>();
-    let new_lines = new_text.lines().collect::<Vec<_>>();
-    let mut lcs = vec![vec![0usize; new_lines.len() + 1]; old_lines.len() + 1];
-
-    for old_index in (0..old_lines.len()).rev() {
-        for new_index in (0..new_lines.len()).rev() {
-            lcs[old_index][new_index] = if old_lines[old_index] == new_lines[new_index] {
-                lcs[old_index + 1][new_index + 1] + 1
-            } else {
-                std::cmp::max(lcs[old_index + 1][new_index], lcs[old_index][new_index + 1])
-            };
-        }
-    }
+    let old_lines = split_diff_lines(old_text);
+    let new_lines = split_diff_lines(new_text);
+    let (prefix_len, suffix_len) = common_edges(&old_lines, &new_lines);
+    let old_middle_end = old_lines.len() - suffix_len;
+    let new_middle_end = new_lines.len() - suffix_len;
+    let old_middle = &old_lines[prefix_len..old_middle_end];
+    let new_middle = &new_lines[prefix_len..new_middle_end];
 
     let mut diff = String::new();
     diff.push_str(&format!("--- {old_label}\n"));
@@ -127,34 +123,177 @@ pub(crate) fn render_unified_diff(
         unified_range(new_lines.len())
     ));
 
+    for line in &old_lines[..prefix_len] {
+        push_context_line(&mut diff, line);
+    }
+
+    if exact_diff_is_bounded(old_middle.len(), new_middle.len()) {
+        push_exact_diff_body(&mut diff, old_middle, new_middle);
+    } else {
+        push_replace_diff_body(&mut diff, old_middle, new_middle);
+    }
+
+    for line in &old_lines[old_middle_end..] {
+        push_context_line(&mut diff, line);
+    }
+
+    diff
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DiffLine<'a> {
+    text: &'a str,
+    has_newline: bool,
+}
+
+fn split_diff_lines(text: &str) -> Vec<DiffLine<'_>> {
+    let mut lines = Vec::new();
+    let mut line_start = 0usize;
+
+    for (index, character) in text.char_indices() {
+        if character == '\n' {
+            lines.push(DiffLine {
+                text: &text[line_start..index],
+                has_newline: true,
+            });
+            line_start = index + character.len_utf8();
+        }
+    }
+
+    if line_start < text.len() {
+        lines.push(DiffLine {
+            text: &text[line_start..],
+            has_newline: false,
+        });
+    }
+
+    lines
+}
+
+fn common_edges(old_lines: &[DiffLine<'_>], new_lines: &[DiffLine<'_>]) -> (usize, usize) {
+    let mut prefix_len = 0usize;
+
+    while prefix_len < old_lines.len()
+        && prefix_len < new_lines.len()
+        && old_lines[prefix_len] == new_lines[prefix_len]
+    {
+        prefix_len += 1;
+    }
+
+    let mut suffix_len = 0usize;
+
+    while suffix_len < old_lines.len().saturating_sub(prefix_len)
+        && suffix_len < new_lines.len().saturating_sub(prefix_len)
+        && old_lines[old_lines.len() - suffix_len - 1]
+            == new_lines[new_lines.len() - suffix_len - 1]
+    {
+        suffix_len += 1;
+    }
+
+    (prefix_len, suffix_len)
+}
+
+fn exact_diff_is_bounded(old_len: usize, new_len: usize) -> bool {
+    old_len
+        .checked_add(1)
+        .and_then(|old_cells| {
+            new_len
+                .checked_add(1)
+                .and_then(|new_cells| old_cells.checked_mul(new_cells))
+        })
+        .is_some_and(|cells| cells <= MAX_EXACT_DIFF_CELLS)
+}
+
+fn push_exact_diff_body(diff: &mut String, old_lines: &[DiffLine<'_>], new_lines: &[DiffLine<'_>]) {
+    let columns = new_lines.len() + 1;
+    let mut lcs = vec![0usize; (old_lines.len() + 1) * columns];
+
+    for old_index in (0..old_lines.len()).rev() {
+        for new_index in (0..new_lines.len()).rev() {
+            let index = lcs_index(columns, old_index, new_index);
+            lcs[index] = if old_lines[old_index] == new_lines[new_index] {
+                lcs[lcs_index(columns, old_index + 1, new_index + 1)] + 1
+            } else {
+                std::cmp::max(
+                    lcs[lcs_index(columns, old_index + 1, new_index)],
+                    lcs[lcs_index(columns, old_index, new_index + 1)],
+                )
+            };
+        }
+    }
+
     let mut old_index = 0usize;
     let mut new_index = 0usize;
 
     while old_index < old_lines.len() && new_index < new_lines.len() {
         if old_lines[old_index] == new_lines[new_index] {
-            diff.push_str(&format!(" {}\n", old_lines[old_index]));
+            push_context_line(diff, &old_lines[old_index]);
             old_index += 1;
             new_index += 1;
-        } else if lcs[old_index + 1][new_index] >= lcs[old_index][new_index + 1] {
-            diff.push_str(&format!("-{}\n", old_lines[old_index]));
+        } else if lcs[lcs_index(columns, old_index + 1, new_index)]
+            >= lcs[lcs_index(columns, old_index, new_index + 1)]
+        {
+            push_removed_line(diff, &old_lines[old_index]);
             old_index += 1;
         } else {
-            diff.push_str(&format!("+{}\n", new_lines[new_index]));
+            push_added_line(diff, &new_lines[new_index]);
             new_index += 1;
         }
     }
 
     while old_index < old_lines.len() {
-        diff.push_str(&format!("-{}\n", old_lines[old_index]));
+        push_removed_line(diff, &old_lines[old_index]);
         old_index += 1;
     }
 
     while new_index < new_lines.len() {
-        diff.push_str(&format!("+{}\n", new_lines[new_index]));
+        push_added_line(diff, &new_lines[new_index]);
         new_index += 1;
     }
+}
 
-    diff
+fn push_replace_diff_body(
+    diff: &mut String,
+    old_lines: &[DiffLine<'_>],
+    new_lines: &[DiffLine<'_>],
+) {
+    for line in old_lines {
+        push_removed_line(diff, line);
+    }
+
+    for line in new_lines {
+        push_added_line(diff, line);
+    }
+}
+
+fn lcs_index(columns: usize, old_index: usize, new_index: usize) -> usize {
+    old_index * columns + new_index
+}
+
+fn push_context_line(diff: &mut String, line: &DiffLine<'_>) {
+    push_line(diff, ' ', line);
+}
+
+fn push_removed_line(diff: &mut String, line: &DiffLine<'_>) {
+    push_line(diff, '-', line);
+
+    if !line.has_newline {
+        diff.push_str("\\ No newline at end of snapshot\n");
+    }
+}
+
+fn push_added_line(diff: &mut String, line: &DiffLine<'_>) {
+    push_line(diff, '+', line);
+
+    if !line.has_newline {
+        diff.push_str("\\ No newline at end of current file\n");
+    }
+}
+
+fn push_line(diff: &mut String, prefix: char, line: &DiffLine<'_>) {
+    diff.push(prefix);
+    diff.push_str(line.text);
+    diff.push('\n');
 }
 
 fn unified_range(line_count: usize) -> String {
@@ -191,6 +330,48 @@ mod tests {
         assert!(diff.contains("+++ current:/project/src/lib.rs"));
         assert!(diff.contains("-    println!(\"old\");"));
         assert!(diff.contains("+    println!(\"new\");"));
+    }
+
+    #[test]
+    fn renders_final_newline_only_changes() {
+        let diff = render_unified_diff(
+            "snapshot:abc:note.txt",
+            "current:/project/note.txt",
+            "v1\n",
+            "v1",
+        );
+
+        assert!(diff.contains("-v1"));
+        assert!(diff.contains("+v1"));
+        assert!(diff.contains("\\ No newline at end of current file"));
+    }
+
+    #[test]
+    fn renders_large_different_inputs_without_quadratic_lcs_matrix() {
+        let old_text = numbered_lines("old");
+        let new_text = numbered_lines("new");
+
+        let diff = render_unified_diff(
+            "snapshot:abc:large.txt",
+            "current:/project/large.txt",
+            &old_text,
+            &new_text,
+        );
+
+        assert!(diff.contains("-old-0"));
+        assert!(diff.contains("+new-1499"));
+    }
+
+    fn numbered_lines(prefix: &str) -> String {
+        use std::fmt::Write as _;
+
+        let mut text = String::new();
+
+        for index in 0..1_500 {
+            writeln!(&mut text, "{prefix}-{index}").expect("writing to string must succeed");
+        }
+
+        text
     }
 
     #[test]

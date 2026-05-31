@@ -23,6 +23,7 @@
 
 Two different audiences:
 
+- **`agents/CURRENT_STATUS.md`** — the short current-state index for contributors and coding agents; read it before larger roadmap files.
 - **`agents/AGENTS.md` (this file)** — how to work on the repository.
 - **`llms.txt`** — how a coding agent should use local-history at runtime (MCP tools or CLI). Packaged into `local-history-mcp` as `local-history://guide` and summarized in MCP `SERVER_INSTRUCTIONS`.
 
@@ -35,7 +36,7 @@ When MCP tools, agent workflows, or natural-language routing change, keep these 
 
 Document capability-based integration: prefer MCP when `local_history_*` tools are exposed; use the CLI mapping in `llms.txt` when they are not. Do not assume every agent host exposes MCP.
 
-Stored snapshot timestamps remain RFC3339 UTC. Human-readable CLI and MCP tables use the local system timezone; `--json` and structured MCP snapshot fields stay UTC.
+Stored snapshot timestamps remain RFC3339 UTC. Human-readable CLI and MCP tables use the local system timezone with an explicit `UTC` / `+HH:MM` suffix; `--json` and structured MCP snapshot fields stay UTC.
 
 ## Change policy
 

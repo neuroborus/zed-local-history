@@ -1036,20 +1036,20 @@ coverage/
 *.log
 ```
 
-The project should respect:
+Future configurable ignore policy should respect:
 
 - `.gitignore`;
 - optional `.local-history-ignore`;
 - global config;
 - size limits.
 
-Open question for MVP:
+MVP decision as implemented:
 
 ```text
-Should ignored files be protected by local history or ignored by default?
+Ignore behavior is built-in only today; `.gitignore`, `.local-history-ignore`, and global ignore config are not wired yet.
 ```
 
-The safer first version should respect `.gitignore` by default and allow opt-in overrides.
+Future work can add `.gitignore` / `.local-history-ignore` support as explicit configurable policy.
 
 ## 20. Retention Policy
 
@@ -1245,7 +1245,7 @@ The sidecar JSON contract should make this possible without changing storage.
 - What size limit should be used for Markdown previews?
 - How should numbered restore from the last list expire safely?
 - Should interactive CLI use a full TUI or a simpler prompt-based flow?
-- Should `.gitignore` be respected by default, or should local history intentionally protect ignored files unless excluded separately?
+- **Resolved for current MVP:** ignore behavior is built-in only. `.gitignore` / `.local-history-ignore` support is future configurable policy, not current behavior.
 - How strict will Zed extension review be for a non-LSP native helper downloaded by the extension?
 - Should the extension support a user-provided sidecar binary path from the beginning?
 
@@ -1291,7 +1291,7 @@ The project is successful when:
 - Markdown snapshot files can be opened directly in Zed;
 - hour and 10-minute segment reports are generated correctly;
 - JSON output is stable enough for future clients;
-- human-readable CLI and MCP summaries show timestamps in the local system timezone while JSON and structured MCP fields keep RFC3339 UTC;
+- human-readable CLI and MCP summaries show timestamps in the local system timezone with an explicit `UTC` / `+HH:MM` suffix while JSON and structured MCP fields keep RFC3339 UTC;
 - storage does not grow without bounds;
 - secrets and generated files are not captured accidentally by default as much as reasonably possible;
 - the tool works even if Git history is missing or damaged;

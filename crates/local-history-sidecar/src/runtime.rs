@@ -1,13 +1,15 @@
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use local_history_core::{
-    matches_default_ignored_path, normalize_project_root, LocalHistoryStore, SnapshotId,
-    SnapshotKind, SnapshotWriteRequest, StorageError, StorageLayout,
+    default_data_dir, matches_default_ignored_path, normalize_project_root, project_id_for_root,
+    LocalHistoryStore, SnapshotId, SnapshotKind, SnapshotWriteRequest, StorageError, StorageLayout,
+    SNAPSHOT_ID_LEN,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -18,6 +20,8 @@ const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(750);
 const WATCHER_STALE_AFTER: u64 = 5;
 const DAEMON_START_TIMEOUT: Duration = Duration::from_secs(3);
 const DAEMON_START_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const STATUS_READ_RETRIES: usize = 3;
+const STATUS_READ_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 
 type RuntimeResult<T> = Result<T, String>;
 
@@ -58,6 +62,56 @@ struct WatcherStatusRecord {
     view_root: PathBuf,
     log_path: PathBuf,
     last_error: Option<String>,
+    #[serde(default)]
+    skipped_snapshot_count: u64,
+    #[serde(default)]
+    last_skipped_snapshot: Option<WatcherSkippedSnapshotRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct WatcherSkippedSnapshotRecord {
+    reason: String,
+    relative_path: PathBuf,
+    size_bytes: u64,
+    max_bytes: u64,
+    skipped_at: String,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ReconcileReport {
+    skipped_snapshot_count: u64,
+    last_skipped_snapshot: Option<WatcherSkippedSnapshotRecord>,
+}
+
+impl ReconcileReport {
+    fn has_skipped_snapshots(&self) -> bool {
+        self.skipped_snapshot_count > 0
+    }
+
+    fn record_snapshot_too_large(
+        &mut self,
+        relative_path: PathBuf,
+        size_bytes: u64,
+        max_bytes: u64,
+        skipped_at: String,
+    ) {
+        println!(
+            "skipped snapshot: reason=snapshot_too_large relative_path={} size_bytes={} max_bytes={} skipped_at={}",
+            relative_path.display(),
+            size_bytes,
+            max_bytes,
+            skipped_at
+        );
+
+        self.skipped_snapshot_count = self.skipped_snapshot_count.saturating_add(1);
+        self.last_skipped_snapshot = Some(WatcherSkippedSnapshotRecord {
+            reason: "snapshot_too_large".to_string(),
+            relative_path,
+            size_bytes,
+            max_bytes,
+            skipped_at,
+        });
+    }
 }
 
 pub fn health_value() -> Value {
@@ -97,6 +151,8 @@ pub fn watch(project_root: &Path) -> RuntimeResult<()> {
             view_root: store.layout().view_dir.clone(),
             log_path: log_path(store.layout()),
             last_error: None,
+            skipped_snapshot_count: 0,
+            last_skipped_snapshot: None,
         },
     )?;
 
@@ -121,10 +177,17 @@ pub fn watch(project_root: &Path) -> RuntimeResult<()> {
             }
         };
 
-        if let Err(error) = reconcile_project_state(&store, &state, &current) {
-            update_status_error(store.layout(), &project_root, Some(error.clone()))?;
-            thread::sleep(WATCH_POLL_INTERVAL);
-            continue;
+        let reconcile_report = match reconcile_project_state(&store, &state, &current) {
+            Ok(report) => report,
+            Err(error) => {
+                update_status_error(store.layout(), &project_root, Some(error.clone()))?;
+                thread::sleep(WATCH_POLL_INTERVAL);
+                continue;
+            }
+        };
+
+        if reconcile_report.has_skipped_snapshots() {
+            update_status_skipped_snapshots(store.layout(), &project_root, &reconcile_report)?;
         }
 
         state = current;
@@ -141,11 +204,11 @@ pub fn ensure_daemon(project_root: &Path) -> RuntimeResult<Value> {
     let existing = read_status(&status_file)?;
 
     if let Some(record) = existing.as_ref() {
-        if status_is_fresh(record) {
+        if should_reuse_existing_watcher(record) {
             return Ok(json!({
                 "status": "ok",
                 "started": false,
-                "watcher": watcher_record_json(record, true),
+                "watcher": watcher_record_json(record, status_is_fresh(record)),
             }));
         }
     }
@@ -183,26 +246,28 @@ pub fn ensure_daemon(project_root: &Path) -> RuntimeResult<Value> {
 }
 
 pub fn status(project_root: &Path) -> RuntimeResult<Value> {
-    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
-    let project_root = store.project().root.clone();
+    let project_root = normalize_project_root(project_root);
+    let project_id = project_id_for_root(&project_root);
+    let layout = StorageLayout::for_project(default_data_dir(), project_id.as_str());
 
     Ok(watcher_status_value(
-        store.layout(),
+        &layout,
         &project_root,
-        store.project().id.as_str(),
-        read_status(status_path(store.layout()))?,
+        project_id.as_str(),
+        read_status(status_path(&layout))?,
     ))
 }
 
 pub fn view_root(project_root: &Path) -> RuntimeResult<Value> {
-    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
-    let project_root = store.project().root.clone();
+    let project_root = normalize_project_root(project_root);
+    let project_id = project_id_for_root(&project_root);
+    let layout = StorageLayout::for_project(default_data_dir(), project_id.as_str());
 
     Ok(json!({
         "status": "ok",
         "project_root": project_root.display().to_string(),
-        "project_id": store.project().id.as_str(),
-        "view_root": store.layout().view_dir.display().to_string(),
+        "project_id": project_id.as_str(),
+        "view_root": layout.view_dir.display().to_string(),
     }))
 }
 
@@ -296,9 +361,10 @@ pub fn restore_snapshot(snapshot_id: &str) -> RuntimeResult<Value> {
 fn resolve_snapshot_id(input: &str) -> RuntimeResult<SnapshotId> {
     let snapshot_id = SnapshotId::new(input);
 
-    if LocalHistoryStore::open_default_for_snapshot(&snapshot_id)
-        .map_err(|error| error.to_string())?
-        .is_some()
+    if input.chars().count() == SNAPSHOT_ID_LEN
+        && LocalHistoryStore::open_default_for_snapshot_read_only(&snapshot_id)
+            .map_err(|error| error.to_string())?
+            .is_some()
     {
         return Ok(snapshot_id);
     }
@@ -363,6 +429,7 @@ fn watcher_status_value(
 fn watcher_record_json(record: &WatcherStatusRecord, active: bool) -> Value {
     json!({
         "active": active,
+        "process_alive": process_is_alive(record.pid),
         "pid": record.pid,
         "started_at": record.started_at.clone(),
         "heartbeat_at": record.heartbeat_at.clone(),
@@ -375,6 +442,8 @@ fn watcher_record_json(record: &WatcherStatusRecord, active: bool) -> Value {
         "view_root": record.view_root.display().to_string(),
         "log_path": record.log_path.display().to_string(),
         "last_error": record.last_error.clone(),
+        "skipped_snapshot_count": record.skipped_snapshot_count,
+        "last_skipped_snapshot": record.last_skipped_snapshot.clone(),
     })
 }
 
@@ -401,6 +470,10 @@ fn wait_for_status(status_file: &Path, timeout: Duration) -> RuntimeResult<Watch
 
 fn status_is_fresh(record: &WatcherStatusRecord) -> bool {
     current_unix_seconds().saturating_sub(record.heartbeat_unix_seconds) <= WATCHER_STALE_AFTER
+}
+
+fn should_reuse_existing_watcher(record: &WatcherStatusRecord) -> bool {
+    status_is_fresh(record) || process_is_alive(record.pid)
 }
 
 fn update_status_watched_files(
@@ -431,6 +504,23 @@ fn update_status_error(
     write_status(status_path(layout), &record)
 }
 
+fn update_status_skipped_snapshots(
+    layout: &StorageLayout,
+    project_root: &Path,
+    report: &ReconcileReport,
+) -> RuntimeResult<()> {
+    let mut record =
+        read_status(status_path(layout))?.unwrap_or_else(|| blank_status(layout, project_root));
+    record.heartbeat_at = current_timestamp()?;
+    record.heartbeat_unix_seconds = current_unix_seconds();
+    record.skipped_snapshot_count = record
+        .skipped_snapshot_count
+        .saturating_add(report.skipped_snapshot_count);
+    record.last_skipped_snapshot = report.last_skipped_snapshot.clone();
+
+    write_status(status_path(layout), &record)
+}
+
 fn blank_status(layout: &StorageLayout, project_root: &Path) -> WatcherStatusRecord {
     WatcherStatusRecord {
         project_root: project_root.to_path_buf(),
@@ -449,6 +539,8 @@ fn blank_status(layout: &StorageLayout, project_root: &Path) -> WatcherStatusRec
         view_root: layout.view_dir.clone(),
         log_path: log_path(layout),
         last_error: None,
+        skipped_snapshot_count: 0,
+        last_skipped_snapshot: None,
     }
 }
 
@@ -456,23 +548,37 @@ fn reconcile_project_state(
     store: &LocalHistoryStore,
     previous: &ProjectState,
     current: &ProjectState,
-) -> RuntimeResult<()> {
+) -> RuntimeResult<ReconcileReport> {
+    let mut report = ReconcileReport::default();
+
     for candidate in diff_project_states(previous, current) {
+        let SnapshotCandidate {
+            relative_path,
+            previous_state,
+        } = candidate;
+        let timestamp = current_timestamp()?;
+
         match store.store_snapshot(SnapshotWriteRequest {
-            relative_path: candidate.relative_path,
-            contents: candidate.previous_state.contents,
-            timestamp: current_timestamp()?,
+            relative_path: relative_path.clone(),
+            contents: previous_state.contents,
+            timestamp: timestamp.clone(),
             kind: SnapshotKind::Raw,
-            is_binary: candidate.previous_state.is_binary,
+            is_binary: previous_state.is_binary,
             captures_missing_file: false,
         }) {
             Ok(_) => {}
-            Err(StorageError::SnapshotTooLarge { .. }) => continue,
+            Err(StorageError::SnapshotTooLarge {
+                size_bytes,
+                max_bytes,
+            }) => {
+                report.record_snapshot_too_large(relative_path, size_bytes, max_bytes, timestamp);
+                continue;
+            }
             Err(error) => return Err(error.to_string()),
         }
     }
 
-    Ok(())
+    Ok(report)
 }
 
 fn diff_project_states(previous: &ProjectState, current: &ProjectState) -> Vec<SnapshotCandidate> {
@@ -570,23 +676,158 @@ fn write_status(path: impl AsRef<Path>, record: &WatcherStatusRecord) -> Runtime
     let path = path.as_ref();
     let bytes = serde_json::to_vec_pretty(record)
         .map_err(|error| format!("failed to serialize watcher status: {error}"))?;
-    fs::write(path, bytes)
-        .map_err(|error| format!("failed to write watcher status {}: {error}", path.display()))
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "failed to write watcher status {}: missing parent directory",
+            path.display()
+        )
+    })?;
+    let temp_path = status_temp_path(path);
+
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "failed to create watcher status directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    fs::write(&temp_path, bytes).map_err(|error| {
+        format!(
+            "failed to write temporary watcher status {}: {error}",
+            temp_path.display()
+        )
+    })?;
+
+    if let Err(error) = replace_status_file(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!(
+            "failed to replace watcher status {}: {error}",
+            path.display()
+        ));
+    }
+
+    Ok(())
 }
 
 fn read_status(path: impl AsRef<Path>) -> RuntimeResult<Option<WatcherStatusRecord>> {
     let path = path.as_ref();
 
+    for attempt in 0..STATUS_READ_RETRIES {
+        match read_status_once(path) {
+            Ok(record) => return Ok(record),
+            Err(StatusReadError::Parse(_)) if attempt + 1 < STATUS_READ_RETRIES => {
+                thread::sleep(STATUS_READ_RETRY_INTERVAL);
+                continue;
+            }
+            Err(error) => return Err(error.into_message()),
+        }
+    }
+
+    unreachable!("status read retry loop must return");
+}
+
+fn read_status_once(path: &Path) -> Result<Option<WatcherStatusRecord>, StatusReadError> {
     if !path.is_file() {
         return Ok(None);
     }
 
-    let bytes = fs::read(path)
-        .map_err(|error| format!("failed to read watcher status {}: {error}", path.display()))?;
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(StatusReadError::Io(format!(
+                "failed to read watcher status {}: {error}",
+                path.display()
+            )));
+        }
+    };
 
-    serde_json::from_slice(&bytes)
-        .map(Some)
-        .map_err(|error| format!("failed to parse watcher status {}: {error}", path.display()))
+    serde_json::from_slice(&bytes).map(Some).map_err(|error| {
+        StatusReadError::Parse(format!(
+            "failed to parse watcher status {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn status_temp_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "watcher-status.json".to_string());
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    path.with_file_name(format!("{file_name}.tmp.{}.{}", std::process::id(), unique))
+}
+
+#[cfg(windows)]
+fn replace_status_file(temp_path: &Path, target_path: &Path) -> std::io::Result<()> {
+    if target_path.exists() {
+        fs::remove_file(target_path)?;
+    }
+
+    fs::rename(temp_path, target_path)
+}
+
+#[cfg(not(windows))]
+fn replace_status_file(temp_path: &Path, target_path: &Path) -> std::io::Result<()> {
+    fs::rename(temp_path, target_path)
+}
+
+#[derive(Debug)]
+enum StatusReadError {
+    Io(String),
+    Parse(String),
+}
+
+impl StatusReadError {
+    fn into_message(self) -> String {
+        match self {
+            Self::Io(message) | Self::Parse(message) => message,
+        }
+    }
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+
+    process_is_alive_impl(pid)
+}
+
+#[cfg(target_os = "linux")]
+fn process_is_alive_impl(pid: u32) -> bool {
+    Path::new("/proc").join(pid.to_string()).exists()
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn process_is_alive_impl(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn process_is_alive_impl(pid: u32) -> bool {
+    let filter = format!("PID eq {pid}");
+    let output = Command::new("tasklist")
+        .args(["/FI", filter.as_str(), "/NH"])
+        .output();
+
+    output
+        .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+        .unwrap_or(false)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_is_alive_impl(_pid: u32) -> bool {
+    false
 }
 
 fn current_timestamp() -> RuntimeResult<String> {
@@ -630,13 +871,16 @@ fn current_unix_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        diff_project_states, reconcile_project_state, scan_project, segment_bounds_at,
-        status_is_fresh, FileState, ProjectState, WatcherStatusRecord,
+        diff_project_states, read_status, reconcile_project_state, resolve_snapshot_id,
+        scan_project, segment_bounds_at, should_reuse_existing_watcher, status_is_fresh,
+        watcher_record_json, write_status, FileState, ProjectState, WatcherSkippedSnapshotRecord,
+        WatcherStatusRecord,
     };
-    use local_history_core::{LocalHistoryStore, SnapshotKind};
+    use local_history_core::{LocalHistoryStore, RetentionPolicy, SnapshotKind};
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use time::format_description::well_known::Rfc3339;
     use time::macros::format_description;
     use time::OffsetDateTime;
@@ -773,6 +1017,41 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_project_state_reports_oversized_snapshot_skips() {
+        let root = create_test_root("oversized-skip");
+        let base_dir = root.join("data");
+        let project_root = root.join("project");
+
+        fs::create_dir_all(&base_dir).expect("base dir must exist");
+        fs::create_dir_all(&project_root).expect("project dir must exist");
+
+        let store = LocalHistoryStore::open(&base_dir, &project_root).expect("store must open");
+        let max_bytes = RetentionPolicy::default().max_file_size_bytes;
+        let oversized = vec![b'x'; (max_bytes + 1) as usize];
+        let previous = state_with_file("src/large.txt", &oversized);
+        let current = state_with_file("src/large.txt", b"small now");
+
+        let report =
+            reconcile_project_state(&store, &previous, &current).expect("reconcile must succeed");
+
+        assert_eq!(report.skipped_snapshot_count, 1);
+        let skipped = report
+            .last_skipped_snapshot
+            .expect("last skipped snapshot must be recorded");
+        assert_eq!(skipped.reason, "snapshot_too_large");
+        assert_eq!(skipped.relative_path, PathBuf::from("src/large.txt"));
+        assert_eq!(skipped.size_bytes, max_bytes + 1);
+        assert_eq!(skipped.max_bytes, max_bytes);
+
+        let snapshots = store
+            .recent_raw_snapshots(10)
+            .expect("snapshot query must succeed");
+        assert!(snapshots.is_empty());
+
+        cleanup_test_project(&root);
+    }
+
+    #[test]
     fn reconcile_project_state_handles_atomic_replace_save_pattern() {
         let root = create_test_root("atomic-replace");
         let base_dir = root.join("data");
@@ -810,22 +1089,108 @@ mod tests {
 
     #[test]
     fn status_freshness_uses_recent_heartbeat() {
-        let record = WatcherStatusRecord {
-            project_root: PathBuf::from("/tmp/project"),
-            project_id: "project-id".to_string(),
-            pid: 42,
-            started_at: "2026-05-02T14:00:00Z".to_string(),
-            heartbeat_at: "2026-05-02T14:00:00Z".to_string(),
-            heartbeat_unix_seconds: super::current_unix_seconds(),
-            watched_files: 3,
-            data_dir: PathBuf::from("/tmp/data"),
-            database_path: PathBuf::from("/tmp/data/metadata.sqlite"),
-            view_root: PathBuf::from("/tmp/data/view"),
-            log_path: PathBuf::from("/tmp/data/watcher.log"),
-            last_error: None,
-        };
+        let record = watcher_status_record(super::current_unix_seconds(), 42);
 
         assert!(status_is_fresh(&record));
+    }
+
+    #[test]
+    fn stale_status_with_live_pid_blocks_daemon_spawn() {
+        let record = watcher_status_record(0, std::process::id());
+
+        assert!(!status_is_fresh(&record));
+        assert!(should_reuse_existing_watcher(&record));
+
+        let json = watcher_record_json(&record, status_is_fresh(&record));
+        assert_eq!(json["active"], false);
+        assert_eq!(json["process_alive"], true);
+    }
+
+    #[test]
+    fn watcher_status_json_includes_oversized_skip_diagnostics() {
+        let mut record = watcher_status_record(super::current_unix_seconds(), std::process::id());
+        record.skipped_snapshot_count = 2;
+        record.last_skipped_snapshot = Some(WatcherSkippedSnapshotRecord {
+            reason: "snapshot_too_large".to_string(),
+            relative_path: PathBuf::from("src/large.txt"),
+            size_bytes: 4_194_305,
+            max_bytes: 4_194_304,
+            skipped_at: "2026-05-02T14:01:00Z".to_string(),
+        });
+
+        let json = watcher_record_json(&record, status_is_fresh(&record));
+
+        assert_eq!(json["skipped_snapshot_count"], 2);
+        assert_eq!(
+            json["last_skipped_snapshot"]["reason"],
+            "snapshot_too_large"
+        );
+        assert_eq!(
+            json["last_skipped_snapshot"]["relative_path"],
+            "src/large.txt"
+        );
+        assert_eq!(json["last_skipped_snapshot"]["size_bytes"], 4_194_305);
+        assert_eq!(json["last_skipped_snapshot"]["max_bytes"], 4_194_304);
+    }
+
+    #[test]
+    fn resolve_snapshot_id_rejects_too_short_prefix() {
+        let error = resolve_snapshot_id("abcde").expect_err("short prefix must fail");
+
+        assert!(error.contains("snapshot ID prefix is too short"));
+        assert!(error.contains("minimum is 6"));
+    }
+
+    #[test]
+    fn status_write_uses_atomic_temp_replace() {
+        let root = create_test_root("status-atomic");
+        fs::create_dir_all(&root).expect("root dir must exist");
+        let status_file = root.join("watcher-status.json");
+        let record = watcher_status_record(super::current_unix_seconds(), std::process::id());
+
+        write_status(&status_file, &record).expect("status write must succeed");
+
+        let loaded = read_status(&status_file)
+            .expect("status read must succeed")
+            .expect("status must exist");
+        let temp_entries = fs::read_dir(&root)
+            .expect("root dir must be readable")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp."))
+            .count();
+
+        assert_eq!(loaded.pid, record.pid);
+        assert_eq!(loaded.project_id, record.project_id);
+        assert_eq!(temp_entries, 0);
+
+        cleanup_test_project(&root);
+    }
+
+    #[test]
+    fn status_read_retries_transient_parse_race() {
+        let root = create_test_root("status-race");
+        fs::create_dir_all(&root).expect("root dir must exist");
+        let status_file = root.join("watcher-status.json");
+        fs::write(&status_file, b"{").expect("partial status file must be written");
+
+        let writer_status_file = status_file.clone();
+        let record = watcher_status_record(super::current_unix_seconds(), std::process::id());
+        let writer_record = record.clone();
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(10));
+            write_status(&writer_status_file, &writer_record)
+                .expect("replacement status write must succeed");
+        });
+
+        let loaded = read_status(&status_file)
+            .expect("status read must recover after retry")
+            .expect("status must exist");
+        writer.join().expect("writer thread must finish");
+
+        assert_eq!(loaded.pid, record.pid);
+        assert_eq!(loaded.project_id, record.project_id);
+
+        cleanup_test_project(&root);
     }
 
     #[test]
@@ -928,6 +1293,25 @@ mod tests {
             FileState::from_contents(contents.to_vec()),
         );
         state
+    }
+
+    fn watcher_status_record(heartbeat_unix_seconds: u64, pid: u32) -> WatcherStatusRecord {
+        WatcherStatusRecord {
+            project_root: PathBuf::from("/tmp/project"),
+            project_id: "project-id".to_string(),
+            pid,
+            started_at: "2026-05-02T14:00:00Z".to_string(),
+            heartbeat_at: "2026-05-02T14:00:00Z".to_string(),
+            heartbeat_unix_seconds,
+            watched_files: 3,
+            data_dir: PathBuf::from("/tmp/data"),
+            database_path: PathBuf::from("/tmp/data/metadata.sqlite"),
+            view_root: PathBuf::from("/tmp/data/view"),
+            log_path: PathBuf::from("/tmp/data/watcher.log"),
+            last_error: None,
+            skipped_snapshot_count: 0,
+            last_skipped_snapshot: None,
+        }
     }
 
     fn create_test_project(label: &str) -> PathBuf {
