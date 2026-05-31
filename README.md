@@ -837,7 +837,7 @@ Contributions are welcome — issues, docs fixes, and focused pull requests.
 
 ### Before you change code
 
-Read [`agents/README.md`](agents/README.md) for the contributor doc set: product goals, working agreements, development plan, manual testing, and the post-change checklist.
+Start with [`agents/CURRENT_STATUS.md`](agents/CURRENT_STATUS.md) for the current implementation and known limits. Then read [`agents/README.md`](agents/README.md) for the full contributor doc set: working agreements, product goals, development plan, manual testing, and the post-change checklist.
 
 Keep recovery logic in `local-history-core`. The CLI, sidecar, MCP server, and Zed extension should stay thin adapters. Restore must remain safety-first (safety snapshot before writing the live file).
 

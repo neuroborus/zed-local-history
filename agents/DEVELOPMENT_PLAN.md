@@ -400,7 +400,7 @@ coverage/
 *.log
 ```
 
-Support:
+Future configurable ignore support:
 
 - `.gitignore`;
 - optional `.local-history-ignore`;

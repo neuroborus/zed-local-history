@@ -23,6 +23,7 @@
 
 Two different audiences:
 
+- **`agents/CURRENT_STATUS.md`** — the short current-state index for contributors and coding agents; read it before larger roadmap files.
 - **`agents/AGENTS.md` (this file)** — how to work on the repository.
 - **`llms.txt`** — how a coding agent should use local-history at runtime (MCP tools or CLI). Packaged into `local-history-mcp` as `local-history://guide` and summarized in MCP `SERVER_INSTRUCTIONS`.
 
