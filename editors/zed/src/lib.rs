@@ -270,7 +270,9 @@ fn resolve_mcp_binary() -> Result<String, String> {
 
     if let Some(path) = mcp_on_path(os) {
         if mcp_is_compatible(&path)? {
-            return resolve_lookup_binary_path(&path);
+            if let Ok(resolved_path) = resolve_lookup_binary_path(os, &path) {
+                return Ok(resolved_path);
+            }
         }
     }
 
@@ -442,7 +444,7 @@ fn resolve_executable_path(binary: &str) -> Result<String, String> {
         .map_err(|error| format!("failed to resolve executable path `{binary}`: {error}"))
 }
 
-fn resolve_lookup_binary_path(binary: &str) -> Result<String, String> {
+fn resolve_lookup_binary_path(os: Os, binary: &str) -> Result<String, String> {
     let path = Path::new(binary);
 
     if path.is_absolute() {
@@ -453,13 +455,9 @@ fn resolve_lookup_binary_path(binary: &str) -> Result<String, String> {
         return resolve_executable_path(binary);
     }
 
-    let shell_command = if cfg!(windows) {
-        format!("where {binary}")
-    } else {
-        format!("command -v {binary}")
-    };
-    let output = ProcessCommand::new("sh")
-        .args(["-c", &shell_command])
+    let (program, args) = path_lookup_command(os, binary);
+    let output = ProcessCommand::new(program)
+        .args(args.iter().cloned())
         .output()
         .map_err(|error| format!("failed to resolve `{binary}` on PATH: {error}"))?;
 
@@ -484,6 +482,14 @@ fn resolve_lookup_binary_path(binary: &str) -> Result<String, String> {
     }
 
     Ok(resolved)
+}
+
+fn path_lookup_command(os: Os, binary: &str) -> (&'static str, Vec<String>) {
+    if matches!(os, Os::Windows) {
+        ("where", vec![binary.to_string()])
+    } else {
+        ("sh", vec!["-c".to_string(), format!("command -v {binary}")])
+    }
 }
 
 /// Zed spawns context servers without the extension workdir as cwd, so relative cached
@@ -857,7 +863,7 @@ mod tests {
     use super::{
         cached_mcp_path, extension_version, finalize_context_server_spawn_path,
         is_compatible_mcp_version, is_compatible_sidecar_version, mcp_install_directory_name,
-        mcp_release_target, parse_semver_triplet, release_tag, release_target,
+        mcp_release_target, parse_semver_triplet, path_lookup_command, release_tag, release_target,
         resolve_executable_path, sidecar_install_directory_name, ReleaseTarget,
     };
     use std::path::Path;
@@ -1109,6 +1115,21 @@ mod tests {
         assert_eq!(
             resolve_executable_path(&path).expect("absolute path must pass through"),
             path
+        );
+    }
+
+    #[test]
+    fn path_lookup_command_uses_zed_host_os() {
+        assert_eq!(
+            path_lookup_command(Os::Windows, "local-history-mcp.exe"),
+            ("where", vec!["local-history-mcp.exe".to_string()])
+        );
+        assert_eq!(
+            path_lookup_command(Os::Linux, "local-history-mcp"),
+            (
+                "sh",
+                vec!["-c".to_string(), "command -v local-history-mcp".to_string()]
+            )
         );
     }
 

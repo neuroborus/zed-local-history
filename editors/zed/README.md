@@ -58,7 +58,7 @@ Current behavior:
 - release bootstrap currently has explicit asset mappings for macOS `x86_64` / `aarch64`, Linux `x86_64` / `aarch64`, and Windows `x86_64` / `aarch64`
 - the extension registers `local-history` as a context server and starts the resolved `local-history-mcp` binary
 - cached release binaries live under versioned paths such as `local-history-mcp-0.1.0/<asset-stem>/local-history-mcp`; the extension canonicalizes those paths before executing them because Zed's extension host runs `ProcessCommand` and context-server commands on the host without joining the extension work directory
-- PATH/dev MCP binaries are resolved to absolute paths via `command -v`; `finalize_context_server_spawn_path` rejects bare names and unresolved relative paths but does not call `fs::metadata` on host paths (WASM cannot see them even after a successful `--version` probe)
+- PATH/dev MCP binaries are resolved to absolute paths via the host OS lookup command (`command -v` on Unix, `where` on Windows); if lookup resolution fails, the extension falls back to the cached/downloaded release binary. `finalize_context_server_spawn_path` rejects bare names and unresolved relative paths but does not call `fs::metadata` on host paths (WASM cannot see them even after a successful `--version` probe)
 
 ## Extension capabilities
 

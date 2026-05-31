@@ -4,8 +4,8 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-31
 
+- Zed MCP PATH lookup on Windows: `resolve_lookup_binary_path` uses `zed::current_platform()` host `Os` (`where` on Windows, `command -v` via `sh` on Unix) instead of `cfg!(windows)`; failed PATH resolution falls back to cached/downloaded MCP while keeping version compatibility checks on PATH binaries.
 - Unified diff hardening in `local-history-core`: line tokenization keeps trailing-newline state so `v1\n` vs `v1` is not reported as unchanged; common prefix/suffix trimming, a 1M-cell LCS cap, and replace-block fallback avoid quadratic memory on large CLI/MCP diffs.
-- Finalize workflow: `agents/FINALIZE.md` adds an independent project-audit step; `agents/AUDIT_FINDINGS.md` records cross-cutting review items (diff fix marked resolved in-tree).
 - MCP recent-list presentation modes: `local_history_recent_snapshots` now defaults to `presentation=rich` (timestamp, path, id, one-line content preview in the text summary Zed shows agents), with `index` and `ids_only` for compact output; `llms.txt` and MCP `SERVER_INSTRUCTIONS` document the contract.
 - Zed MCP startup hardening: extension resolves PATH/cached MCP binaries to absolute spawn paths, rejects unresolved relative/bare names via `finalize_context_server_spawn_path` without WASM `fs::metadata` probes on host binaries, adds manifest/spawn regression tests, and wires `cargo test` into `zed-ci` / `full-ci`; MCP adds stdio initialize smoke tests.
 - Zed extension bootstrap fix for Agent Panel MCP: `extension.toml` now declares required `process:exec` and `download_file` capabilities; cached sidecar/MCP release binaries are canonicalized to absolute paths before `ProcessCommand` and context-server launch (Zed host does not resolve relative workdir paths for extension subprocess calls).
