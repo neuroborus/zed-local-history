@@ -4,6 +4,7 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-31
 
+- Sidecar watcher daemon hardening: `watcher-status.json` is written via temp file + rename, `read_status` retries transient parse races, and `ensure_daemon` reuses a watcher when its PID is still alive even if the heartbeat is stale; status JSON now includes `process_alive`.
 - Read-only storage inspection: `local-history-core` adds `open_read_only` / `open_for_snapshot_id_read_only` with SQLite read-only connections and `ensure_writable()` guards on mutating APIs; CLI/MCP list/view/diff/status use read-only open, restore/prune/snapshot stay on write paths, and sidecar `status`/`view_root` resolve layout without opening a writable store.
 - Direct time filters validate RFC3339 before querying: `query_snapshots` returns `InvalidTimestamp` for bad bounds; CLI `resolve_time_filters` and MCP `resolve_time_filters` reject invalid `from`/`to`/`from_timestamp`/`to_timestamp` instead of silently returning empty results.
 - MCP tool `content` for text-only hosts: `local_history_guide` returns the full `llms.txt` guide in `content[0].text`; `local_history_diff_snapshot` adds a fenced diff excerpt (20k-char cap with truncation notice) while keeping the full unified diff in `structuredContent.diff`.

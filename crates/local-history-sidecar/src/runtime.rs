@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -18,6 +19,8 @@ const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(750);
 const WATCHER_STALE_AFTER: u64 = 5;
 const DAEMON_START_TIMEOUT: Duration = Duration::from_secs(3);
 const DAEMON_START_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const STATUS_READ_RETRIES: usize = 3;
+const STATUS_READ_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 
 type RuntimeResult<T> = Result<T, String>;
 
@@ -141,11 +144,11 @@ pub fn ensure_daemon(project_root: &Path) -> RuntimeResult<Value> {
     let existing = read_status(&status_file)?;
 
     if let Some(record) = existing.as_ref() {
-        if status_is_fresh(record) {
+        if should_reuse_existing_watcher(record) {
             return Ok(json!({
                 "status": "ok",
                 "started": false,
-                "watcher": watcher_record_json(record, true),
+                "watcher": watcher_record_json(record, status_is_fresh(record)),
             }));
         }
     }
@@ -365,6 +368,7 @@ fn watcher_status_value(
 fn watcher_record_json(record: &WatcherStatusRecord, active: bool) -> Value {
     json!({
         "active": active,
+        "process_alive": process_is_alive(record.pid),
         "pid": record.pid,
         "started_at": record.started_at.clone(),
         "heartbeat_at": record.heartbeat_at.clone(),
@@ -403,6 +407,10 @@ fn wait_for_status(status_file: &Path, timeout: Duration) -> RuntimeResult<Watch
 
 fn status_is_fresh(record: &WatcherStatusRecord) -> bool {
     current_unix_seconds().saturating_sub(record.heartbeat_unix_seconds) <= WATCHER_STALE_AFTER
+}
+
+fn should_reuse_existing_watcher(record: &WatcherStatusRecord) -> bool {
+    status_is_fresh(record) || process_is_alive(record.pid)
 }
 
 fn update_status_watched_files(
@@ -572,23 +580,158 @@ fn write_status(path: impl AsRef<Path>, record: &WatcherStatusRecord) -> Runtime
     let path = path.as_ref();
     let bytes = serde_json::to_vec_pretty(record)
         .map_err(|error| format!("failed to serialize watcher status: {error}"))?;
-    fs::write(path, bytes)
-        .map_err(|error| format!("failed to write watcher status {}: {error}", path.display()))
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "failed to write watcher status {}: missing parent directory",
+            path.display()
+        )
+    })?;
+    let temp_path = status_temp_path(path);
+
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "failed to create watcher status directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    fs::write(&temp_path, bytes).map_err(|error| {
+        format!(
+            "failed to write temporary watcher status {}: {error}",
+            temp_path.display()
+        )
+    })?;
+
+    if let Err(error) = replace_status_file(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!(
+            "failed to replace watcher status {}: {error}",
+            path.display()
+        ));
+    }
+
+    Ok(())
 }
 
 fn read_status(path: impl AsRef<Path>) -> RuntimeResult<Option<WatcherStatusRecord>> {
     let path = path.as_ref();
 
+    for attempt in 0..STATUS_READ_RETRIES {
+        match read_status_once(path) {
+            Ok(record) => return Ok(record),
+            Err(StatusReadError::Parse(_)) if attempt + 1 < STATUS_READ_RETRIES => {
+                thread::sleep(STATUS_READ_RETRY_INTERVAL);
+                continue;
+            }
+            Err(error) => return Err(error.into_message()),
+        }
+    }
+
+    unreachable!("status read retry loop must return");
+}
+
+fn read_status_once(path: &Path) -> Result<Option<WatcherStatusRecord>, StatusReadError> {
     if !path.is_file() {
         return Ok(None);
     }
 
-    let bytes = fs::read(path)
-        .map_err(|error| format!("failed to read watcher status {}: {error}", path.display()))?;
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(StatusReadError::Io(format!(
+                "failed to read watcher status {}: {error}",
+                path.display()
+            )));
+        }
+    };
 
-    serde_json::from_slice(&bytes)
-        .map(Some)
-        .map_err(|error| format!("failed to parse watcher status {}: {error}", path.display()))
+    serde_json::from_slice(&bytes).map(Some).map_err(|error| {
+        StatusReadError::Parse(format!(
+            "failed to parse watcher status {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn status_temp_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "watcher-status.json".to_string());
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    path.with_file_name(format!("{file_name}.tmp.{}.{}", std::process::id(), unique))
+}
+
+#[cfg(windows)]
+fn replace_status_file(temp_path: &Path, target_path: &Path) -> std::io::Result<()> {
+    if target_path.exists() {
+        fs::remove_file(target_path)?;
+    }
+
+    fs::rename(temp_path, target_path)
+}
+
+#[cfg(not(windows))]
+fn replace_status_file(temp_path: &Path, target_path: &Path) -> std::io::Result<()> {
+    fs::rename(temp_path, target_path)
+}
+
+#[derive(Debug)]
+enum StatusReadError {
+    Io(String),
+    Parse(String),
+}
+
+impl StatusReadError {
+    fn into_message(self) -> String {
+        match self {
+            Self::Io(message) | Self::Parse(message) => message,
+        }
+    }
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+
+    process_is_alive_impl(pid)
+}
+
+#[cfg(target_os = "linux")]
+fn process_is_alive_impl(pid: u32) -> bool {
+    Path::new("/proc").join(pid.to_string()).exists()
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn process_is_alive_impl(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn process_is_alive_impl(pid: u32) -> bool {
+    let filter = format!("PID eq {pid}");
+    let output = Command::new("tasklist")
+        .args(["/FI", filter.as_str(), "/NH"])
+        .output();
+
+    output
+        .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+        .unwrap_or(false)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_is_alive_impl(_pid: u32) -> bool {
+    false
 }
 
 fn current_timestamp() -> RuntimeResult<String> {
@@ -632,13 +775,15 @@ fn current_unix_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        diff_project_states, reconcile_project_state, scan_project, segment_bounds_at,
-        status_is_fresh, FileState, ProjectState, WatcherStatusRecord,
+        diff_project_states, read_status, reconcile_project_state, scan_project, segment_bounds_at,
+        should_reuse_existing_watcher, status_is_fresh, watcher_record_json, write_status,
+        FileState, ProjectState, WatcherStatusRecord,
     };
     use local_history_core::{LocalHistoryStore, SnapshotKind};
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use time::format_description::well_known::Rfc3339;
     use time::macros::format_description;
     use time::OffsetDateTime;
@@ -812,22 +957,73 @@ mod tests {
 
     #[test]
     fn status_freshness_uses_recent_heartbeat() {
-        let record = WatcherStatusRecord {
-            project_root: PathBuf::from("/tmp/project"),
-            project_id: "project-id".to_string(),
-            pid: 42,
-            started_at: "2026-05-02T14:00:00Z".to_string(),
-            heartbeat_at: "2026-05-02T14:00:00Z".to_string(),
-            heartbeat_unix_seconds: super::current_unix_seconds(),
-            watched_files: 3,
-            data_dir: PathBuf::from("/tmp/data"),
-            database_path: PathBuf::from("/tmp/data/metadata.sqlite"),
-            view_root: PathBuf::from("/tmp/data/view"),
-            log_path: PathBuf::from("/tmp/data/watcher.log"),
-            last_error: None,
-        };
+        let record = watcher_status_record(super::current_unix_seconds(), 42);
 
         assert!(status_is_fresh(&record));
+    }
+
+    #[test]
+    fn stale_status_with_live_pid_blocks_daemon_spawn() {
+        let record = watcher_status_record(0, std::process::id());
+
+        assert!(!status_is_fresh(&record));
+        assert!(should_reuse_existing_watcher(&record));
+
+        let json = watcher_record_json(&record, status_is_fresh(&record));
+        assert_eq!(json["active"], false);
+        assert_eq!(json["process_alive"], true);
+    }
+
+    #[test]
+    fn status_write_uses_atomic_temp_replace() {
+        let root = create_test_root("status-atomic");
+        fs::create_dir_all(&root).expect("root dir must exist");
+        let status_file = root.join("watcher-status.json");
+        let record = watcher_status_record(super::current_unix_seconds(), std::process::id());
+
+        write_status(&status_file, &record).expect("status write must succeed");
+
+        let loaded = read_status(&status_file)
+            .expect("status read must succeed")
+            .expect("status must exist");
+        let temp_entries = fs::read_dir(&root)
+            .expect("root dir must be readable")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp."))
+            .count();
+
+        assert_eq!(loaded.pid, record.pid);
+        assert_eq!(loaded.project_id, record.project_id);
+        assert_eq!(temp_entries, 0);
+
+        cleanup_test_project(&root);
+    }
+
+    #[test]
+    fn status_read_retries_transient_parse_race() {
+        let root = create_test_root("status-race");
+        fs::create_dir_all(&root).expect("root dir must exist");
+        let status_file = root.join("watcher-status.json");
+        fs::write(&status_file, b"{").expect("partial status file must be written");
+
+        let writer_status_file = status_file.clone();
+        let record = watcher_status_record(super::current_unix_seconds(), std::process::id());
+        let writer_record = record.clone();
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(10));
+            write_status(&writer_status_file, &writer_record)
+                .expect("replacement status write must succeed");
+        });
+
+        let loaded = read_status(&status_file)
+            .expect("status read must recover after retry")
+            .expect("status must exist");
+        writer.join().expect("writer thread must finish");
+
+        assert_eq!(loaded.pid, record.pid);
+        assert_eq!(loaded.project_id, record.project_id);
+
+        cleanup_test_project(&root);
     }
 
     #[test]
@@ -930,6 +1126,23 @@ mod tests {
             FileState::from_contents(contents.to_vec()),
         );
         state
+    }
+
+    fn watcher_status_record(heartbeat_unix_seconds: u64, pid: u32) -> WatcherStatusRecord {
+        WatcherStatusRecord {
+            project_root: PathBuf::from("/tmp/project"),
+            project_id: "project-id".to_string(),
+            pid,
+            started_at: "2026-05-02T14:00:00Z".to_string(),
+            heartbeat_at: "2026-05-02T14:00:00Z".to_string(),
+            heartbeat_unix_seconds,
+            watched_files: 3,
+            data_dir: PathBuf::from("/tmp/data"),
+            database_path: PathBuf::from("/tmp/data/metadata.sqlite"),
+            view_root: PathBuf::from("/tmp/data/view"),
+            log_path: PathBuf::from("/tmp/data/watcher.log"),
+            last_error: None,
+        }
     }
 
     fn create_test_project(label: &str) -> PathBuf {
