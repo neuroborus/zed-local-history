@@ -466,9 +466,9 @@ Default output should be numbered:
 ```text
 Latest snapshots
 
-[1] 2026-05-02 14:18:51  src/orders/order.service.ts        abc123
-[2] 2026-05-02 14:14:28  src/history/history.mapper.ts      def456
-[3] 2026-05-02 14:11:03  src/orders/order.service.ts        ghi789
+[1] 2026-05-02 14:18:51 +02:00  src/orders/order.service.ts        abc123
+[2] 2026-05-02 14:14:28 +02:00  src/history/history.mapper.ts      def456
+[3] 2026-05-02 14:11:03 +02:00  src/orders/order.service.ts        ghi789
 ```
 
 ### 4.5 Add basic restore by snapshot ID

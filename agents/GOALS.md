@@ -1291,7 +1291,7 @@ The project is successful when:
 - Markdown snapshot files can be opened directly in Zed;
 - hour and 10-minute segment reports are generated correctly;
 - JSON output is stable enough for future clients;
-- human-readable CLI and MCP summaries show timestamps in the local system timezone while JSON and structured MCP fields keep RFC3339 UTC;
+- human-readable CLI and MCP summaries show timestamps in the local system timezone with an explicit `UTC` / `+HH:MM` suffix while JSON and structured MCP fields keep RFC3339 UTC;
 - storage does not grow without bounds;
 - secrets and generated files are not captured accidentally by default as much as reasonably possible;
 - the tool works even if Git history is missing or damaged;

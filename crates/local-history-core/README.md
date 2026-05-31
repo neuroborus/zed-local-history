@@ -14,7 +14,7 @@ Core domain and storage layer for `zed-local-history`.
 - Markdown view generation and rebuild;
 - retention and prune behavior;
 - unified text diff from snapshot content to the current live file (newline-aware lines; bounded exact LCS with replace fallback on very large changes);
-- local timezone formatting for human-facing timestamp display.
+- local timezone formatting for human-facing timestamp display, including explicit `UTC` / `+HH:MM` suffixes.
 
 ## Owns
 

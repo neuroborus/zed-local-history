@@ -478,7 +478,7 @@ local-history prune <project-root> [--json]
 
 - Storage keeps snapshot timestamps as RFC3339 UTC strings.
 - `--json` output keeps the same canonical UTC timestamps.
-- Human-readable CLI and MCP summaries convert UTC to the local system timezone for `recent`, `show`, `history`, restore messages, and similar tables.
+- Human-readable CLI and MCP summaries convert UTC to the local system timezone for `recent`, `show`, `history`, restore messages, and similar tables, and include an explicit suffix such as `UTC` or `+02:00`.
 - Generated Markdown under external `view/` still labels UTC explicitly.
 
 ## Sidecar command reference
