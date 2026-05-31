@@ -5,10 +5,11 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use local_history_core::{
-    default_data_dir, format_timestamp_local, init_local_offset_detection, project_id_for_root,
-    snapshot_to_current_unified_diff, HourHistory, LocalHistoryStore, PruneReport, RestoreOutcome,
-    RetentionPolicy, SegmentHistory, SnapshotId, SnapshotKind, SnapshotPage, SnapshotQuery,
-    SnapshotRecord, SnapshotWriteRequest, StorageLayout, WindowedFileHistory,
+    default_data_dir, format_timestamp_local, init_local_offset_detection, normalize_project_root,
+    project_id_for_root, segment_label, snapshot_to_current_unified_diff, HourBucket, HourHistory,
+    LocalHistoryStore, PruneReport, RestoreOutcome, RetentionPolicy, SegmentHistory, SnapshotId,
+    SnapshotKind, SnapshotPage, SnapshotQuery, SnapshotRecord, SnapshotWriteRequest, StorageLayout,
+    TimeSegment, WindowedFileHistory,
 };
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
@@ -374,7 +375,7 @@ fn prune_history(project_root: &Path, json_output: bool) -> Result<(), String> {
 
 fn show_snapshot(snapshot_id_input: &str, json_output: bool) -> Result<(), String> {
     let snapshot_id = resolve_snapshot_id(snapshot_id_input)?;
-    let store = LocalHistoryStore::open_default_for_snapshot(&snapshot_id)
+    let store = LocalHistoryStore::open_default_for_snapshot_read_only(&snapshot_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
     let snapshot = store
@@ -412,7 +413,7 @@ fn show_snapshot(snapshot_id_input: &str, json_output: bool) -> Result<(), Strin
 
 fn diff_snapshot(snapshot_id_input: &str) -> Result<(), String> {
     let snapshot_id = resolve_snapshot_id(snapshot_id_input)?;
-    let store = LocalHistoryStore::open_default_for_snapshot(&snapshot_id)
+    let store = LocalHistoryStore::open_default_for_snapshot_read_only(&snapshot_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("snapshot not found: {}", snapshot_id.as_str()))?;
     let snapshot = store
@@ -433,13 +434,33 @@ fn diff_snapshot(snapshot_id_input: &str) -> Result<(), String> {
 }
 
 fn print_hour_history(project_root: &Path, hour: &str, json_output: bool) -> Result<(), String> {
-    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
-    let history = store
-        .history_for_hour(hour)
+    let store = LocalHistoryStore::open_default_read_only(project_root)
         .map_err(|error| error.to_string())?;
+    let history = match store.as_ref() {
+        Some(store) => store
+            .history_for_hour(hour)
+            .map_err(|error| error.to_string())?,
+        None => empty_hour_history(hour)?,
+    };
 
     if json_output {
-        return print_json_value(&hour_history_json(&store, &history));
+        return match store.as_ref() {
+            Some(store) => print_json_value(&hour_history_json(
+                store.project().id.as_str(),
+                &store.project().root,
+                &history,
+            )),
+            None => {
+                let normalized_root = normalize_project_root(project_root);
+                let project_id = project_id_for_root(&normalized_root);
+
+                print_json_value(&hour_history_json(
+                    project_id.as_str(),
+                    &normalized_root,
+                    &history,
+                ))
+            }
+        };
     }
 
     println!(
@@ -462,13 +483,33 @@ fn print_segment_history(
     to: &str,
     json_output: bool,
 ) -> Result<(), String> {
-    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
-    let history = store
-        .history_for_segment(from, to)
+    let store = LocalHistoryStore::open_default_read_only(project_root)
         .map_err(|error| error.to_string())?;
+    let history = match store.as_ref() {
+        Some(store) => store
+            .history_for_segment(from, to)
+            .map_err(|error| error.to_string())?,
+        None => empty_segment_history(from, to)?,
+    };
 
     if json_output {
-        return print_json_value(&segment_history_json(&store, &history));
+        return match store.as_ref() {
+            Some(store) => print_json_value(&segment_history_json(
+                store.project().id.as_str(),
+                &store.project().root,
+                &history,
+            )),
+            None => {
+                let normalized_root = normalize_project_root(project_root);
+                let project_id = project_id_for_root(&normalized_root);
+
+                print_json_value(&segment_history_json(
+                    project_id.as_str(),
+                    &normalized_root,
+                    &history,
+                ))
+            }
+        };
     }
 
     print_segment_history_text(&history);
@@ -550,13 +591,35 @@ fn print_snapshot_query(
     json_output: bool,
     heading: &str,
 ) -> Result<(), String> {
-    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
-    let page = store
-        .query_snapshots(query)
+    let store = LocalHistoryStore::open_default_read_only(project_root)
         .map_err(|error| error.to_string())?;
+    let page = match store.as_ref() {
+        Some(store) => store
+            .query_snapshots(query)
+            .map_err(|error| error.to_string())?,
+        None => empty_snapshot_page(query),
+    };
 
     if json_output {
-        return print_json_value(&snapshot_page_json(&store, query, &page));
+        return match store.as_ref() {
+            Some(store) => print_json_value(&snapshot_page_json(
+                store.project().id.as_str(),
+                &store.project().root,
+                query,
+                &page,
+            )),
+            None => {
+                let normalized_root = normalize_project_root(project_root);
+                let project_id = project_id_for_root(&normalized_root);
+
+                print_json_value(&snapshot_page_json(
+                    project_id.as_str(),
+                    &normalized_root,
+                    query,
+                    &page,
+                ))
+            }
+        };
     }
 
     println!("{heading}");
@@ -594,7 +657,13 @@ fn browse_snapshots(
     page_size: usize,
     filters: &SnapshotFilterArgs,
 ) -> Result<(), String> {
-    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
+    let Some(store) = LocalHistoryStore::open_default_read_only(project_root)
+        .map_err(|error| error.to_string())?
+    else {
+        println!("Raw snapshot browse");
+        println!("No snapshots found for the current filters.");
+        return Ok(());
+    };
     let mut current_page = 1usize;
 
     loop {
@@ -678,7 +747,10 @@ fn preview_and_maybe_restore(
     println!("{}", render_snapshot_preview(snapshot, &contents));
 
     if confirm("Restore this snapshot? [y/N]: ")? {
-        let outcome = store
+        let write_store = LocalHistoryStore::open_default_for_snapshot(&snapshot.id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("snapshot not found: {}", snapshot.id.as_str()))?;
+        let outcome = write_store
             .restore_snapshot(&snapshot.id, &current_timestamp()?)
             .map_err(|error| error.to_string())?;
         print_restore_outcome("restored snapshot", &outcome);
@@ -867,7 +939,82 @@ fn resolve_time_filters(
         ));
     }
 
+    if let Some(from) = from.as_deref() {
+        OffsetDateTime::parse(from, &Rfc3339)
+            .map_err(|error| format!("invalid timestamp `{from}`: {error}"))?;
+    }
+
+    if let Some(to) = to.as_deref() {
+        OffsetDateTime::parse(to, &Rfc3339)
+            .map_err(|error| format!("invalid timestamp `{to}`: {error}"))?;
+    }
+
     Ok((from.clone(), to.clone()))
+}
+
+fn empty_hour_history(hour: &str) -> Result<HourHistory, String> {
+    let hour_start = PrimitiveDateTime::parse(
+        hour,
+        &time::macros::format_description!("[year]-[month]-[day]T[hour]"),
+    )
+    .map_err(|error| format!("invalid ISO hour `{hour}`: {error}"))?
+    .assume_utc();
+    let hour_end = hour_start + Duration::hours(1);
+    let mut segments = Vec::with_capacity(6);
+    let mut segment_start = hour_start;
+
+    for _ in 0..6 {
+        let segment_end = segment_start + Duration::minutes(10);
+        segments.push(empty_segment_history_from_timestamps(
+            segment_start,
+            segment_end,
+        )?);
+        segment_start = segment_end;
+    }
+
+    Ok(HourHistory {
+        hour: HourBucket {
+            from: format_rfc3339(hour_start)?,
+            to: format_rfc3339(hour_end)?,
+        },
+        segments,
+    })
+}
+
+fn empty_segment_history(from: &str, to: &str) -> Result<SegmentHistory, String> {
+    let from_timestamp = OffsetDateTime::parse(from, &Rfc3339)
+        .map_err(|error| format!("invalid timestamp `{from}`: {error}"))?;
+    let to_timestamp = OffsetDateTime::parse(to, &Rfc3339)
+        .map_err(|error| format!("invalid timestamp `{to}`: {error}"))?;
+
+    if from_timestamp >= to_timestamp {
+        return Err(format!(
+            "segment start must be earlier than end: {from} .. {to}"
+        ));
+    }
+
+    empty_segment_history_from_timestamps(from_timestamp, to_timestamp)
+}
+
+fn empty_segment_history_from_timestamps(
+    from: OffsetDateTime,
+    to: OffsetDateTime,
+) -> Result<SegmentHistory, String> {
+    let label = segment_label(from.hour(), from.minute()).ok_or_else(|| {
+        format!(
+            "failed to derive 10-minute segment label for {}",
+            format_rfc3339(from).unwrap_or_else(|_| from.to_string())
+        )
+    })?;
+
+    Ok(SegmentHistory {
+        segment: TimeSegment {
+            label,
+            from: format_rfc3339(from)?,
+            to: format_rfc3339(to)?,
+        },
+        affected_files: Vec::new(),
+    })
 }
 
 fn normalize_cli_relative_path(path: &Path) -> Result<PathBuf, String> {
@@ -882,7 +1029,11 @@ fn normalize_cli_relative_path(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn current_timestamp() -> Result<String, String> {
-    OffsetDateTime::now_utc()
+    format_rfc3339(OffsetDateTime::now_utc())
+}
+
+fn format_rfc3339(timestamp: OffsetDateTime) -> Result<String, String> {
+    timestamp
         .format(&Rfc3339)
         .map_err(|error| format!("failed to format timestamp: {error}"))
 }
@@ -890,7 +1041,7 @@ fn current_timestamp() -> Result<String, String> {
 fn resolve_snapshot_id(input: &str) -> Result<SnapshotId, String> {
     let snapshot_id = SnapshotId::new(input);
 
-    if LocalHistoryStore::open_default_for_snapshot(&snapshot_id)
+    if LocalHistoryStore::open_default_for_snapshot_read_only(&snapshot_id)
         .map_err(|error| error.to_string())?
         .is_some()
     {
@@ -984,6 +1135,19 @@ fn render_snapshot_preview(snapshot: &SnapshotRecord, contents: &[u8]) -> String
     }
 }
 
+fn empty_snapshot_page(query: &SnapshotQuery) -> SnapshotPage {
+    let page = std::cmp::max(query.page, 1);
+    let page_size = std::cmp::max(query.page_size, 1);
+
+    SnapshotPage {
+        page,
+        page_size,
+        total_items: 0,
+        total_pages: 0,
+        items: Vec::new(),
+    }
+}
+
 fn snapshot_json(snapshot: &SnapshotRecord) -> Value {
     json!({
         "id": snapshot.id.as_str(),
@@ -998,13 +1162,14 @@ fn snapshot_json(snapshot: &SnapshotRecord) -> Value {
 }
 
 fn snapshot_page_json(
-    store: &LocalHistoryStore,
+    project_id: &str,
+    project_root: &Path,
     query: &SnapshotQuery,
     page: &SnapshotPage,
 ) -> Value {
     json!({
-        "project_id": store.project().id.as_str(),
-        "project_root": store.project().root.display().to_string(),
+        "project_id": project_id,
+        "project_root": project_root.display().to_string(),
         "query": {
             "relative_path": query.relative_path.as_ref().map(|path| path.display().to_string()),
             "from_timestamp": query.from_timestamp.clone(),
@@ -1027,10 +1192,10 @@ fn windowed_file_history_json(file_history: &WindowedFileHistory) -> Value {
     })
 }
 
-fn segment_history_json(store: &LocalHistoryStore, history: &SegmentHistory) -> Value {
+fn segment_history_json(project_id: &str, project_root: &Path, history: &SegmentHistory) -> Value {
     json!({
-        "project_id": store.project().id.as_str(),
-        "project_root": store.project().root.display().to_string(),
+        "project_id": project_id,
+        "project_root": project_root.display().to_string(),
         "segment": {
             "label": &history.segment.label,
             "from": &history.segment.from,
@@ -1044,10 +1209,10 @@ fn segment_history_json(store: &LocalHistoryStore, history: &SegmentHistory) -> 
     })
 }
 
-fn hour_history_json(store: &LocalHistoryStore, history: &HourHistory) -> Value {
+fn hour_history_json(project_id: &str, project_root: &Path, history: &HourHistory) -> Value {
     json!({
-        "project_id": store.project().id.as_str(),
-        "project_root": store.project().root.display().to_string(),
+        "project_id": project_id,
+        "project_root": project_root.display().to_string(),
         "hour": {
             "from": &history.hour.from,
             "to": &history.hour.to,
@@ -1446,5 +1611,14 @@ mod tests {
 
         assert_eq!(from.as_deref(), Some("2026-05-02T14:00:00Z"));
         assert_eq!(to.as_deref(), Some("2026-05-02T15:00:00Z"));
+    }
+
+    #[test]
+    fn rejects_invalid_direct_timestamp_filters() {
+        let error = resolve_time_filters(&Some("not-rfc3339".to_string()), &None, &None)
+            .expect_err("invalid from timestamp must fail");
+
+        assert!(error.contains("invalid timestamp"));
+        assert!(error.contains("not-rfc3339"));
     }
 }

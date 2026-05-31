@@ -6,8 +6,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use local_history_core::{
-    matches_default_ignored_path, normalize_project_root, LocalHistoryStore, SnapshotId,
-    SnapshotKind, SnapshotWriteRequest, StorageError, StorageLayout,
+    default_data_dir, matches_default_ignored_path, normalize_project_root, project_id_for_root,
+    LocalHistoryStore, SnapshotId, SnapshotKind, SnapshotWriteRequest, StorageError, StorageLayout,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -183,26 +183,28 @@ pub fn ensure_daemon(project_root: &Path) -> RuntimeResult<Value> {
 }
 
 pub fn status(project_root: &Path) -> RuntimeResult<Value> {
-    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
-    let project_root = store.project().root.clone();
+    let project_root = normalize_project_root(project_root);
+    let project_id = project_id_for_root(&project_root);
+    let layout = StorageLayout::for_project(default_data_dir(), project_id.as_str());
 
     Ok(watcher_status_value(
-        store.layout(),
+        &layout,
         &project_root,
-        store.project().id.as_str(),
-        read_status(status_path(store.layout()))?,
+        project_id.as_str(),
+        read_status(status_path(&layout))?,
     ))
 }
 
 pub fn view_root(project_root: &Path) -> RuntimeResult<Value> {
-    let store = LocalHistoryStore::open_default(project_root).map_err(|error| error.to_string())?;
-    let project_root = store.project().root.clone();
+    let project_root = normalize_project_root(project_root);
+    let project_id = project_id_for_root(&project_root);
+    let layout = StorageLayout::for_project(default_data_dir(), project_id.as_str());
 
     Ok(json!({
         "status": "ok",
         "project_root": project_root.display().to_string(),
-        "project_id": store.project().id.as_str(),
-        "view_root": store.layout().view_dir.display().to_string(),
+        "project_id": project_id.as_str(),
+        "view_root": layout.view_dir.display().to_string(),
     }))
 }
 
@@ -296,7 +298,7 @@ pub fn restore_snapshot(snapshot_id: &str) -> RuntimeResult<Value> {
 fn resolve_snapshot_id(input: &str) -> RuntimeResult<SnapshotId> {
     let snapshot_id = SnapshotId::new(input);
 
-    if LocalHistoryStore::open_default_for_snapshot(&snapshot_id)
+    if LocalHistoryStore::open_default_for_snapshot_read_only(&snapshot_id)
         .map_err(|error| error.to_string())?
         .is_some()
     {

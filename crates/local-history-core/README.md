@@ -19,6 +19,7 @@ Core domain and storage layer for `zed-local-history`.
 ## Owns
 
 - SQLite schema and storage migrations in the current single-schema model.
+- Storage open modes: write/open-or-create for mutating workflows and read-only open for inspection paths.
 - Snapshot ID, project ID, content hash, and restore domain types.
 - Filesystem-browsable Markdown rendering from stored snapshots.
 - Safety-first restore behavior.

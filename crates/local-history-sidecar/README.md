@@ -18,6 +18,7 @@ Native process boundary for watcher runtime and Zed-facing commands.
 - Watcher runtime state and heartbeat files.
 - Daemon spawning behavior.
 - Sidecar command parsing and JSON response shape.
+- Read-only status and view-root diagnostics that do not initialize storage.
 - Runtime translation between watched filesystem state and `local-history-core` snapshots.
 
 ## Does Not Own

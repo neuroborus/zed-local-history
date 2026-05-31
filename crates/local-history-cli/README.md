@@ -19,6 +19,7 @@ User-facing terminal interface for `zed-local-history`.
 - CLI command names and argument parsing.
 - Human-readable output with local timezone timestamp display.
 - JSON output at the command boundary with canonical UTC timestamps.
+- Read-only inspection commands avoid creating or migrating storage; mutating commands use the write/open-or-create path.
 - Interactive browse behavior.
 - Unified text diff output from snapshot to current live file.
 - Snapshot ID prefix resolution for CLI input.

@@ -4,6 +4,8 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-31
 
+- Read-only storage inspection: `local-history-core` adds `open_read_only` / `open_for_snapshot_id_read_only` with SQLite read-only connections and `ensure_writable()` guards on mutating APIs; CLI/MCP list/view/diff/status use read-only open, restore/prune/snapshot stay on write paths, and sidecar `status`/`view_root` resolve layout without opening a writable store.
+- Direct time filters validate RFC3339 before querying: `query_snapshots` returns `InvalidTimestamp` for bad bounds; CLI `resolve_time_filters` and MCP `resolve_time_filters` reject invalid `from`/`to`/`from_timestamp`/`to_timestamp` instead of silently returning empty results.
 - MCP tool `content` for text-only hosts: `local_history_guide` returns the full `llms.txt` guide in `content[0].text`; `local_history_diff_snapshot` adds a fenced diff excerpt (20k-char cap with truncation notice) while keeping the full unified diff in `structuredContent.diff`.
 - Pull-request CI now runs `cargo run -p xtask -- zed-ci` in a parallel `zed-extension` job (`wasm32-wasip2` toolchain) so extension changes are validated on every PR, not only locally. Release workflow bumps GitHub Actions to current majors (`actions/checkout@v6`, `actions/upload-artifact@v7`, `actions/download-artifact@v8`, `softprops/action-gh-release@v3`).
 - Zed MCP PATH lookup on Windows: `resolve_lookup_binary_path` uses `zed::current_platform()` host `Os` (`where` on Windows, `command -v` via `sh` on Unix) instead of `cfg!(windows)`; failed PATH resolution falls back to cached/downloaded MCP while keeping version compatibility checks on PATH binaries.
