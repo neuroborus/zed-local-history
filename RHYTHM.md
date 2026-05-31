@@ -4,6 +4,7 @@ Chronological log of meaningful repo decisions. **Newest sections first:** add e
 
 ## 2026-05-31
 
+- Zed extension bootstrap fix for Agent Panel MCP: `extension.toml` now declares required `process:exec` and `download_file` capabilities; cached sidecar/MCP release binaries are canonicalized to absolute paths before `ProcessCommand` and context-server launch (Zed host does not resolve relative workdir paths for extension subprocess calls).
 - Release workflow: replaced retired `macos-13` runner with `macos-15-intel` for macOS x86_64 builds. GitHub removed macOS 13 hosted runners in December 2025; jobs on `macos-13` wait indefinitely in queue.
 
 ## 2026-05-30

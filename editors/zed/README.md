@@ -16,7 +16,7 @@ Zed's documented MCP server support also creates a second integration route: the
 
 ## Current shape
 
-- `extension.toml` declares the extension manifest, the `local-history` context server, and slash commands.
+- `extension.toml` declares the extension manifest, required Zed extension capabilities (`process:exec`, `download_file`), the `local-history` context server, and slash commands.
 - `src/lib.rs` resolves `local-history-sidecar` and `local-history-mcp` from `PATH` for dev installs, otherwise downloads matching GitHub release assets into the extension work directory, verifies binary version compatibility, calls real sidecar commands from slash-command handlers, and starts the MCP server for Agent Panel tool use.
 - The extension is kept outside the root workspace because it follows Zed's WebAssembly packaging model and will evolve on its own cadence.
 
@@ -57,11 +57,21 @@ Current behavior:
 - tagged releases publish `SHA256SUMS.txt` alongside the archives that the extension bootstrap relies on
 - release bootstrap currently has explicit asset mappings for macOS `x86_64` / `aarch64`, Linux `x86_64` / `aarch64`, and Windows `x86_64` / `aarch64`
 - the extension registers `local-history` as a context server and starts the resolved `local-history-mcp` binary
+- cached release binaries live under versioned paths such as `local-history-mcp-0.1.0/<asset-stem>/local-history-mcp`; the extension canonicalizes those paths before executing them because Zed's extension host runs `ProcessCommand` and context-server commands on the host without joining the extension work directory
+
+## Extension capabilities
+
+Zed 1.4+ requires explicit capability declarations in `extension.toml` before the WASM extension may download release assets or execute sidecar/MCP binaries:
+
+- `process:exec` for `local-history-sidecar`, `local-history-mcp`, and cached release paths under the extension work directory
+- `download_file` from `github.com/neuroborus/zed-local-history/**`
+
+Without these entries, Agent Panel settings show **Local History** but the MCP toggle fails to stay on and `~/.local/share/zed/logs/Zed.log` reports missing `process:exec` capabilities.
 
 Current limitations:
 
 - the extension API does not provide a direct "open arbitrary external file path" action, so the MVP path is to expose the generated Markdown path instead of pretending it can always auto-open it
-- binary bootstrap currently depends on GitHub release assets with stable names; the workflow now produces sidecar and MCP bootstrap assets plus release checksums, but the full packaging/release story still needs live tagged-release validation
+- binary bootstrap depends on GitHub release assets with stable names; sidecar/MCP bootstrap archives and `SHA256SUMS.txt` are published by the release workflow, but each extension version still needs a matching tagged release and live Agent Panel validation before store submission
 - `x86_64-unknown-linux-musl` is still not part of the extension bootstrap contract because the current platform mapping distinguishes OS and CPU architecture, not Linux libc family
 
 The current MCP server can also coexist with these slash commands through direct `context_servers` configuration if users prefer an explicit binary path.
@@ -70,9 +80,9 @@ The current MCP server can also coexist with these slash commands through direct
 
 This package carries its own toolchain file so the extension can target current Zed requirements without forcing the root native workspace to upgrade in lockstep.
 
-For full manual validation, use [agents/ZED_MANUAL_TESTING.md](../../agents/ZED_MANUAL_TESTING.md). For a local extension compile check:
+For full manual validation, use [agents/ZED_MANUAL_TESTING.md](../../agents/ZED_MANUAL_TESTING.md). For automated checks from the repository root:
 
 ```bash
-cd editors/zed
-cargo check --target wasm32-wasip2
+cargo run -p xtask -- zed-ci
+cd editors/zed && cargo test
 ```

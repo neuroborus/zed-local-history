@@ -627,6 +627,52 @@ If the dev extension still fails:
 4. Start Zed from the shell command above, not from a desktop launcher.
 5. Retry `Install Dev Extension`.
 
+## Troubleshooting MCP Toggle / Context Server Startup (2026-05-31)
+
+Symptoms:
+
+- **Agent Settings → Local History** appears, but the toggle will not stay on;
+- Zed Agent ignores `local_history_*` tools and falls back to shell search;
+- `~/.local/share/zed/logs/Zed.log` shows one of:
+
+```text
+ERROR [project::context_server_store] Failed to create context server configuration from settings: from extension "Local History" version 0.1.0: failed to execute `local-history-mcp-0.1.0/local-history-mcp-x86_64-unknown-linux-gnu/local-history-mcp --version`: capability for process:exec ... was not listed in the extension manifest
+```
+
+or, after capabilities are declared:
+
+```text
+ERROR [project::context_server_store] ... failed to execute `local-history-mcp-0.1.0/.../local-history-mcp --version`: No such file or directory (os error 2)
+```
+
+Interpretation:
+
+- the first error means `editors/zed/extension.toml` is missing required `capabilities` entries;
+- the second error means the extension returned a relative cached binary path; current extension code canonicalizes cached paths before execution—reinstall the dev extension after pulling that fix;
+- installing the dev extension does **not** add `local-history-sidecar` to the shell `PATH`; use Agent MCP tools or release CLI on `PATH`, not `local_history_status` as a shell command;
+- enable the server in **Agent Settings** (`agent: open settings`), not via `@` mentions in the chat input.
+
+Fix sequence:
+
+```bash
+pkill -x zed || true
+cd "$REPO"
+cargo run -p xtask -- zed-ci
+RUSTUP_TOOLCHAIN=stable PATH="$HOME/.cargo/bin:$PATH" zed --foreground "$TEST_PROJECT"
+```
+
+Then:
+
+1. reinstall the dev extension from `$REPO/editors/zed`;
+2. open **Agent Settings** and turn **Local History** on;
+3. start a **new** Agent thread with a model selected;
+4. prompt: `Use local-history MCP tools to show status for /tmp/lh-zed-release`.
+
+Expected:
+
+- toggle stays on and the server shows active;
+- the Agent makes a `local_history_status` tool call instead of running shell commands.
+
 ### Common manual-testing mistakes
 
 | Symptom | Likely cause | Fix |
@@ -636,6 +682,9 @@ If the dev extension still fails:
 | Command Palette search `text thread` only finds `multi workspace: next thread` | wrong palette query | search `New Text Thread` or use sidecar CLI |
 | `+` menu has no **New Text Thread** | Zed 1.4.4 UI may omit text threads | sidecar CLI + MCP; optional `agent.default_view` |
 | MCP agent does nothing | no model selected or MCP not configured | pick a model; verify `context_servers` / extension MCP bootstrap |
+| **Local History** MCP toggle off / won't enable | missing `capabilities` in extension manifest or stale dev extension WASM | reinstall dev extension after `zed-ci`; see [MCP toggle troubleshooting](#troubleshooting-mcp-toggle--context-server-startup-2026-05-31) |
+| Agent runs `local_history_status` in shell | MCP server not active; wrong agent surface | enable **Local History** in Agent Settings; use Zed Agent with MCP tools |
+| `zed is already running` after `--foreground` launch | old Zed instance still alive | `pkill -x zed`, then relaunch from shell |
 | Watcher never snapshots | watcher not started | `local-history-sidecar ensure-daemon "$TEST_PROJECT"` |
 | Extension slash: "must run inside an opened Zed worktree" | no project folder open | open `$TEST_PROJECT` as a folder in Zed |
 

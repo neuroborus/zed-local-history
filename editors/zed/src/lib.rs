@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 
 use zed::process::Command as ProcessCommand;
 use zed::serde_json::Value;
@@ -195,12 +196,14 @@ fn run_sidecar_json_with_binary(
     binary: &str,
     args: Vec<String>,
 ) -> Result<Value, String> {
+    let binary = resolve_executable_path(binary)?;
+    let binary_label = binary.clone();
     let mut command = ProcessCommand::new(binary)
         .args(args.iter().cloned())
         .envs(worktree.shell_env());
     let output = command
         .output()
-        .map_err(|error| format!("failed to execute `{binary}`: {error}"))?;
+        .map_err(|error| format!("failed to execute `{binary_label}`: {error}"))?;
 
     if output.status != Some(0) {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -210,7 +213,10 @@ fn run_sidecar_json_with_binary(
             stderr
         };
 
-        return Err(format!("`{binary} {}` failed: {message}", args.join(" ")));
+        return Err(format!(
+            "`{binary_label} {}` failed: {message}",
+            args.join(" ")
+        ));
     }
 
     let stdout = String::from_utf8(output.stdout)
@@ -236,7 +242,7 @@ fn resolve_sidecar_binary(worktree: &zed::Worktree) -> Result<String, String> {
         ensure_binary_executable(target, &cached_path)?;
 
         if sidecar_is_compatible(worktree, &cached_path)? {
-            return Ok(cached_path);
+            return resolve_executable_path(&cached_path);
         }
     }
 
@@ -247,7 +253,7 @@ fn resolve_sidecar_binary(worktree: &zed::Worktree) -> Result<String, String> {
         let version = sidecar_version(worktree, &cached_path)?;
 
         if is_compatible_sidecar_version(&version)? {
-            Ok(cached_path)
+            Ok(resolve_executable_path(&cached_path)?)
         } else {
             Err(incompatible_sidecar_error(&cached_path, &version))
         }
@@ -275,7 +281,7 @@ fn resolve_mcp_binary() -> Result<String, String> {
         ensure_binary_executable(target, &cached_path)?;
 
         if mcp_is_compatible(&cached_path)? {
-            return Ok(cached_path);
+            return resolve_executable_path(&cached_path);
         }
     }
 
@@ -286,7 +292,7 @@ fn resolve_mcp_binary() -> Result<String, String> {
         let version = mcp_version(&cached_path)?;
 
         if is_compatible_mcp_version(&version)? {
-            Ok(cached_path)
+            Ok(resolve_executable_path(&cached_path)?)
         } else {
             Err(incompatible_mcp_error(&cached_path, &version))
         }
@@ -357,10 +363,12 @@ fn mcp_is_compatible(binary: &str) -> Result<bool, String> {
 }
 
 fn mcp_version(binary: &str) -> Result<String, String> {
+    let binary = resolve_executable_path(binary)?;
+    let binary_label = binary.clone();
     let output = ProcessCommand::new(binary)
         .args(["--version"])
         .output()
-        .map_err(|error| format!("failed to execute `{binary} --version`: {error}"))?;
+        .map_err(|error| format!("failed to execute `{binary_label} --version`: {error}"))?;
 
     if output.status != Some(0) {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -370,7 +378,7 @@ fn mcp_version(binary: &str) -> Result<String, String> {
             stderr
         };
 
-        return Err(format!("`{binary} --version` failed: {message}"));
+        return Err(format!("`{binary_label} --version` failed: {message}"));
     }
 
     let stdout = String::from_utf8(output.stdout)
@@ -378,7 +386,9 @@ fn mcp_version(binary: &str) -> Result<String, String> {
     let version = stdout.trim();
 
     if version.is_empty() {
-        Err(format!("`{binary} --version` returned an empty version"))
+        Err(format!(
+            "`{binary_label} --version` returned an empty version"
+        ))
     } else {
         Ok(version.to_string())
     }
@@ -418,6 +428,18 @@ fn ensure_binary_executable(target: ReleaseTarget, binary_path: &str) -> Result<
 
 fn binary_exists(path: &str) -> bool {
     fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+}
+
+fn resolve_executable_path(binary: &str) -> Result<String, String> {
+    let path = Path::new(binary);
+
+    if path.is_absolute() || !binary.contains('/') && !binary.contains('\\') {
+        return Ok(binary.to_string());
+    }
+
+    fs::canonicalize(path)
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|error| format!("failed to resolve executable path `{binary}`: {error}"))
 }
 
 fn cleanup_old_installs(prefix: &str, current_install_dir: &str) -> Result<(), String> {
@@ -768,8 +790,9 @@ mod tests {
     use super::{
         extension_version, is_compatible_mcp_version, is_compatible_sidecar_version,
         mcp_install_directory_name, mcp_release_target, parse_semver_triplet, release_tag,
-        release_target, sidecar_install_directory_name, ReleaseTarget,
+        release_target, resolve_executable_path, sidecar_install_directory_name, ReleaseTarget,
     };
+    use std::path::Path;
     use zed_extension_api::{Architecture, DownloadedFileType, Os};
 
     #[test]
@@ -891,6 +914,57 @@ mod tests {
         assert!(
             !is_compatible_mcp_version("0.0.9").expect("older MCP version must be incompatible")
         );
+    }
+
+    #[test]
+    fn resolve_executable_path_leaves_lookup_names_unchanged() {
+        assert_eq!(
+            resolve_executable_path("local-history-mcp").expect("lookup name must pass through"),
+            "local-history-mcp"
+        );
+        assert_eq!(
+            resolve_executable_path("local-history-sidecar.exe")
+                .expect("windows lookup name must pass through"),
+            "local-history-sidecar.exe"
+        );
+    }
+
+    #[test]
+    fn resolve_executable_path_leaves_absolute_paths_unchanged() {
+        let path = if cfg!(windows) {
+            r"C:\tools\local-history-mcp.exe".to_string()
+        } else {
+            "/usr/local/bin/local-history-mcp".to_string()
+        };
+
+        assert_eq!(
+            resolve_executable_path(&path).expect("absolute path must pass through"),
+            path
+        );
+    }
+
+    #[test]
+    fn resolve_executable_path_canonicalizes_existing_relative_paths() {
+        let base =
+            std::env::temp_dir().join(format!("local-history-zed-ext-test-{}", std::process::id()));
+        let nested =
+            base.join("local-history-mcp-0.1.0/local-history-mcp-x86_64-unknown-linux-gnu");
+        std::fs::create_dir_all(&nested).expect("nested cache dir must be creatable");
+        let binary = nested.join("local-history-mcp");
+        std::fs::write(&binary, b"").expect("placeholder binary must be writable");
+
+        let previous_dir = std::env::current_dir().expect("current dir must be readable");
+        std::env::set_current_dir(&base).expect("test must chdir into temp cache root");
+
+        let relative =
+            "local-history-mcp-0.1.0/local-history-mcp-x86_64-unknown-linux-gnu/local-history-mcp";
+        let resolved = resolve_executable_path(relative).expect("relative cache path must resolve");
+
+        assert!(Path::new(&resolved).is_absolute());
+        assert!(Path::new(&resolved).exists());
+
+        std::env::set_current_dir(previous_dir).expect("test must restore previous dir");
+        let _ = std::fs::remove_dir_all(base);
     }
 }
 
